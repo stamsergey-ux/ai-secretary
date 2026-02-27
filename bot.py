@@ -26,6 +26,7 @@ from telegram.ext import (
     filters, ContextTypes
 )
 from telegram.constants import ParseMode
+import anthropic
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -34,6 +35,8 @@ logger = logging.getLogger(__name__)
 #  КОНФИГ
 # ──────────────────────────────────────────────────
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
 
 # ──────────────────────────────────────────────────
 #  СОСТОЯНИЯ ДИАЛОГА
@@ -377,6 +380,48 @@ def get_chat_response(text: str) -> str:
 
     return random.choice(CHAT_RESPONSES["generic"])
 
+def ask_claude(question: str, sign: dict, ascendant: str) -> str:
+    """Отправляет вопрос пользователя в Claude API с контекстом гороскопа."""
+    if not claude_client:
+        return get_chat_response(question)
+
+    sign_name = next(k for k, v in SIGNS.items() if v is sign)
+    system_prompt = (
+        "Ты — «Мой Астролог», персональный астролог-женщина в Telegram-боте. "
+        "Ты тёплая, заботливая, говоришь на «ты». Твоя аудитория — русскоязычные женщины 28-50 лет.\n\n"
+        "Правила:\n"
+        "- Отвечай кратко: 2-3 предложения максимум.\n"
+        "- Давай конкретные ответы, связанные с гороскопом и знаком пользователя.\n"
+        "- Если вопрос про конкретный раздел гороскопа — цитируй и объясняй именно его.\n"
+        "- Не выходи за рамки астрологической тематики.\n"
+        "- Не используй маркдаун, только текст и эмодзи.\n"
+        "- Не начинай ответ с обращения или приветствия.\n\n"
+        f"Данные пользователя:\n"
+        f"- Знак: {sign_name} {sign['symbol']}\n"
+        f"- Асцендент: {ascendant}\n"
+        f"- Стихия: {sign['element']}\n"
+        f"- Планета: {sign['planet']}\n\n"
+        f"Гороскоп на сегодня:\n"
+        f"- Общий: {sign['main']}\n"
+        f"- Любовь: {sign['love']}\n"
+        f"- Семья: {sign['family']}\n"
+        f"- Здоровье: {sign['health']}\n"
+        f"- Финансы: {sign['finance']}"
+    )
+
+    try:
+        response = claude_client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            system=system_prompt,
+            messages=[{"role": "user", "content": question}],
+        )
+        return response.content[0].text
+    except Exception as e:
+        logger.error(f"Claude API error: {e}")
+        return get_chat_response(question)
+
+
 def build_horoscope_text(sign: dict, ascendant: str) -> str:
     today = datetime.now().strftime("%-d %B %Y").lower()
     # Capitalise first letter
@@ -525,7 +570,8 @@ async def handle_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         await update.message.reply_text("Напиши /start чтобы начать заново.")
         return BIRTH_DATE
 
-    response = get_chat_response(text)
+    ascendant = context.user_data.get("ascendant", "Неизвестен")
+    response = ask_claude(text, sign, ascendant)
     await update.message.reply_text(f"🌙 {response}")
     return CHAT
 
