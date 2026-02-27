@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Мой Астролог — Telegram Bot (Phase 0 Prototype)
+Мой Астролог — Telegram Bot v2
+Совместимость + виральные механики
 Запуск: python3 bot.py
 """
 
@@ -8,6 +9,7 @@ import logging
 import os
 import re
 import random
+import hashlib
 from datetime import date, datetime
 from pathlib import Path
 
@@ -23,6 +25,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     ConversationHandler, CallbackQueryHandler,
+    PicklePersistence,
     filters, ContextTypes
 )
 from telegram.constants import ParseMode
@@ -41,7 +44,7 @@ claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_
 # ──────────────────────────────────────────────────
 #  СОСТОЯНИЯ ДИАЛОГА
 # ──────────────────────────────────────────────────
-BIRTH_DATE, BIRTH_TIME, CHAT = range(3)
+BIRTH_DATE, BIRTH_TIME, CHAT, COMPAT_NAME, COMPAT_DATE, GIFT_NAME, GIFT_DATE = range(7)
 
 # ──────────────────────────────────────────────────
 #  ДАННЫЕ ЗНАКОВ ЗОДИАКА
@@ -223,63 +226,6 @@ SIGNS = {
 
 ASCENDANTS = ["Овен","Телец","Близнецы","Рак","Лев","Дева","Весы","Скорпион","Стрелец","Козерог","Водолей","Рыбы"]
 
-CHAT_RESPONSES = {
-    "greeting": [
-        "Конечно, задавай! Я здесь 🌙",
-        "Слушаю тебя внимательно ✨",
-        "Да, я здесь. Спрашивай — отвечу 🔮",
-    ],
-    "thanks": [
-        "Всегда пожалуйста 🌙 Если появятся ещё вопросы — пиши.",
-        "Рада помочь ✨ Звёзды всегда на твоей стороне.",
-        "Обращайся в любое время 🔮",
-    ],
-    "about": [
-        "Я твой персональный астролог 🌙 Каждое утро присылаю гороскоп, составленный специально для тебя на основе нескольких авторитетных источников. И готова ответить на любой вопрос.",
-        "Я синтезирую прогнозы ведущих российских астрологов и адаптирую их под твой натальный чарт. Задавай вопросы — отвечу как личный астролог, который знает твою карту.",
-    ],
-    "confused": [
-        "Прости, это вне моей компетенции 🙈 Я астролог — спроси меня о звёздах, отношениях, здоровье или финансах.",
-        "Я отвечаю только на вопросы, связанные с астрологией и твоей жизнью ✨ Попробуй спросить что-то другое.",
-        "Не совсем поняла вопрос 🌙 Попробуй переформулировать — или спроси о том, что тебя волнует сегодня.",
-    ],
-    "compatibility": [
-        "Совместимость — одна из самых глубоких тем в астрологии. По положению планет сейчас, твой знак особенно хорошо ладит с Водными и Земными знаками. Напиши дату рождения своего мужчины — скажу точнее 🔮",
-        "Чтобы проверить совместимость точно, мне нужна дата рождения партнёра. Напиши её в формате ДД.ММ.ГГГГ — и я дам развёрнутый ответ ✨",
-        "Звёзды многое говорят о совместимости! Напиши дату рождения его, и я сравню ваши чарты 🌙",
-    ],
-    "love": [
-        "Звёзды говорят: в отношениях сейчас важна не правота, а близость. Первый шаг навстречу принесёт больше, чем долгое ожидание.",
-        "Венера подчёркивает важность маленьких жестов. Тёплое слово сегодня стоит больше, чем букет через неделю.",
-        "Для твоего знака сейчас важно говорить о чувствах прямо. Партнёр не всегда умеет читать мысли, даже если очень любит.",
-    ],
-    "family": [
-        "Планеты указывают: дети сейчас особенно чутки к атмосфере дома. Твоё спокойствие — лучшее, что ты можешь им дать.",
-        "Семейные связи укрепляются через совместные ритуалы. Даже обычный ужин вместе имеет большую силу, чем кажется.",
-        "Хорошая мать — это прежде всего женщина, которая заботится и о себе. Не забывай о своих потребностях.",
-    ],
-    "health": [
-        "Звёзды советуют обратить внимание на режим сна — именно он сейчас влияет на всё остальное.",
-        "Стакан тёплой воды с лимоном утром запустит обмен веществ и придаст ясность мышлению.",
-        "Твой знак сейчас особенно чувствителен к питанию. Больше тёплой еды, меньше кофе.",
-    ],
-    "finance": [
-        "Меркурий сейчас благоприятен для переговоров о деньгах. Если давно хотела поднять финансовый вопрос — время пришло.",
-        "Звёзды советуют: крупные покупки лучше отложить до следующей недели. Сейчас время планирования.",
-        "Твой знак сейчас интуитивен в финансовых вопросах. Доверяй первому ощущению при выборе.",
-    ],
-    "timing": [
-        "По положению планет, ближайшие 3 дня благоприятны для начала нового. Потом Луна войдёт в фазу завершения дел.",
-        "Звёзды говорят: не затягивай с решением дольше трёх дней — момент сейчас хороший.",
-        "Для твоего знака сейчас период активных действий. Через две недели наступит время осмысления.",
-    ],
-    "generic": [
-        "Хороший вопрос 🌙 Звёзды говорят: прислушайся к своей интуиции — она сейчас особенно точна.",
-        "По твоему натальному чарту — сейчас момент доверять себе. Что именно тебя беспокоит?",
-        "Планеты подсказывают: действуй из места любви, а не страха — и результат тебя порадует ✨",
-    ],
-}
-
 # ──────────────────────────────────────────────────
 #  АСТРОЛОГИЧЕСКИЕ ФУНКЦИИ
 # ──────────────────────────────────────────────────
@@ -298,6 +244,9 @@ def get_sign(birth_date: date) -> dict:
     if (m == 10 and d >= 23) or (m == 11 and d <= 21): return SIGNS["Скорпион"]
     return SIGNS["Стрелец"]
 
+def get_sign_name(sign: dict) -> str:
+    return next(k for k, v in SIGNS.items() if v is sign)
+
 def get_ascendant(time_str: str) -> str:
     try:
         h = int(time_str.split(":")[0])
@@ -306,7 +255,6 @@ def get_ascendant(time_str: str) -> str:
         return "Неизвестен"
 
 def parse_date(text: str):
-    """Парсит дату в форматах DD.MM.YYYY, DD/MM/YYYY, YYYY-MM-DD"""
     text = text.strip()
     patterns = [
         r"(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})",
@@ -326,7 +274,6 @@ def parse_date(text: str):
     return None
 
 def parse_time(text: str):
-    """Парсит время в формате HH:MM"""
     text = text.strip()
     m = re.search(r"(\d{1,2})[:\.](\d{2})", text)
     if m:
@@ -335,57 +282,57 @@ def parse_time(text: str):
             return f"{h:02d}:{minute:02d}"
     return None
 
-def get_chat_response(text: str) -> str:
-    t = text.lower().strip()
+# ──────────────────────────────────────────────────
+#  СОВМЕСТИМОСТЬ: УТИЛИТЫ
+# ──────────────────────────────────────────────────
+def _calc_compat_pct(sign1: dict, sign2: dict) -> int:
+    elem1 = sign1["element"].split()[0]
+    elem2 = sign2["element"].split()[0]
+    matrix = {
+        ("Огонь", "Огонь"): 80, ("Огонь", "Воздух"): 90,
+        ("Огонь", "Земля"): 55, ("Огонь", "Вода"): 45,
+        ("Воздух", "Воздух"): 75, ("Воздух", "Земля"): 50,
+        ("Воздух", "Вода"): 60,
+        ("Земля", "Земля"): 85, ("Земля", "Вода"): 88,
+        ("Вода", "Вода"): 82,
+    }
+    key = (elem1, elem2)
+    base = matrix.get(key, matrix.get((elem2, elem1), 65))
+    name1 = get_sign_name(sign1)
+    name2 = get_sign_name(sign2)
+    variation = (hash(name1 + name2) % 15) - 7
+    return max(30, min(99, base + variation))
 
-    # Грубость / негатив — отвечаем мягко, без осуждения
-    if re.search(r"туп|дур|идиот|чушь|бред|ерунд|плох|отстой|не работ|сломал|глуп", t):
-        return random.choice(CHAT_RESPONSES["confused"])
+def _fallback_compat(user_sign_name: str, partner_sign_name: str) -> str:
+    user_elem = SIGNS[user_sign_name]["element"].split()[0]
+    partner_elem = SIGNS[partner_sign_name]["element"].split()[0]
+    harmony = {
+        ("Огонь", "Воздух"): "Ваши стихии питают друг друга — Огонь разгорается от Воздуха.",
+        ("Земля", "Вода"): "Вода питает Землю — это одно из самых гармоничных сочетаний.",
+        ("Огонь", "Вода"): "Огонь и Вода создают пар — страсть есть, но нужен баланс.",
+        ("Огонь", "Земля"): "Огонь согревает Землю, но важно не выжечь — нужна мера.",
+        ("Воздух", "Земля"): "Воздух и Земля учатся друг у друга — баланс мечтаний и практики.",
+        ("Воздух", "Вода"): "Воздух создаёт волны на Воде — отношения эмоциональные и подвижные.",
+    }
+    key = (user_elem, partner_elem)
+    desc = harmony.get(key, harmony.get((partner_elem, user_elem),
+        "Одинаковые стихии — вы хорошо понимаете друг друга, но нужна динамика."))
+    return (
+        f"{desc}\n\n"
+        "В целом ваша пара имеет хороший потенциал. Главное — уважать различия "
+        "и ценить то, что каждый привносит в отношения.\n\n"
+        "Возможные трения: разный темп жизни и подход к решению проблем. "
+        "Но именно это делает вашу пару интересной.\n\n"
+        "Совет: будьте открыты к компромиссам и не забывайте говорить о своих чувствах."
+    )
 
-    # Приветствия и простые фразы
-    if re.search(r"^(привет|здравствуй|хай|добр|можно|да|нет|ок|окей|хорошо|понятно|ладно|ясно)$", t):
-        return random.choice(CHAT_RESPONSES["greeting"])
-
-    # Благодарность
-    if re.search(r"спасиб|благодар|спс|👍|❤", t):
-        return random.choice(CHAT_RESPONSES["thanks"])
-
-    # Вопросы про бота
-    if re.search(r"кто ты|что ты|как ты|как работ|откуда|зачем ты|что умеешь", t):
-        return random.choice(CHAT_RESPONSES["about"])
-
-    # Совместимость — ДО проверки на "муж", чтобы "мужчина" не уходил в love
-    if re.search(r"совмест|подход|мы с|он и я|она и я|наша пара|наши отнош", t):
-        return random.choice(CHAT_RESPONSES["compatibility"])
-
-    # Отношения и любовь
-    if re.search(r"\bмуж\b|партнёр|любов|роман|чувств|отнош|нравится|влюб", t):
-        return random.choice(CHAT_RESPONSES["love"])
-
-    # Семья и дети
-    if re.search(r"дет|ребён|ребенок|семь|\bмам\b|свекр|дочь|сын|родител", t):
-        return random.choice(CHAT_RESPONSES["family"])
-
-    # Здоровье
-    if re.search(r"здоров|болез|самочувств|устал|нет сил|энерг|плохо себя", t):
-        return random.choice(CHAT_RESPONSES["health"])
-
-    # Финансы и работа
-    if re.search(r"деньг|финанс|куп|расход|бюджет|работ|доход|зарплат|бизнес", t):
-        return random.choice(CHAT_RESPONSES["finance"])
-
-    # Время и сроки
-    if re.search(r"когда|стоит ли|лучше|время|ждать|скоро|период|момент", t):
-        return random.choice(CHAT_RESPONSES["timing"])
-
-    return random.choice(CHAT_RESPONSES["generic"])
-
+# ──────────────────────────────────────────────────
+#  CLAUDE AI
+# ──────────────────────────────────────────────────
 def ask_claude(question: str, sign: dict, ascendant: str) -> str:
-    """Отправляет вопрос пользователя в Claude API с контекстом гороскопа."""
     if not claude_client:
-        return get_chat_response(question)
-
-    sign_name = next(k for k, v in SIGNS.items() if v is sign)
+        return "Прислушайся к своей интуиции — она сейчас особенно точна."
+    sign_name = get_sign_name(sign)
     system_prompt = (
         "Ты — «Мой Астролог», персональный астролог-женщина в Telegram-боте. "
         "Ты тёплая, заботливая, говоришь на «ты». Твоя аудитория — русскоязычные женщины 28-50 лет.\n\n"
@@ -408,7 +355,6 @@ def ask_claude(question: str, sign: dict, ascendant: str) -> str:
         f"- Здоровье: {sign['health']}\n"
         f"- Финансы: {sign['finance']}"
     )
-
     try:
         response = claude_client.messages.create(
             model="claude-haiku-4-5-20251001",
@@ -419,15 +365,75 @@ def ask_claude(question: str, sign: dict, ascendant: str) -> str:
         return response.content[0].text
     except Exception as e:
         logger.error(f"Claude API error: {e}")
-        return get_chat_response(question)
+        return "Прислушайся к своей интуиции — она сейчас особенно точна ✨"
 
+
+def ask_claude_compat(
+    user_sign_name: str, user_sign: dict,
+    partner_sign_name: str, partner_sign: dict,
+    compat_type: str, partner_name: str,
+    user_ascendant: str,
+) -> str:
+    if not claude_client:
+        return _fallback_compat(user_sign_name, partner_sign_name)
+    type_labels = {
+        "romantic": "романтическая (пара, муж/жена, партнёр)",
+        "friendship": "дружеская (подруга, коллега)",
+        "family": "семейная (мама, свекровь, ребёнок)",
+    }
+    system_prompt = (
+        "Ты — «Мой Астролог», персональный астролог-женщина в Telegram-боте. "
+        "Ты тёплая, заботливая, говоришь на «ты».\n\n"
+        "Задача: составить отчёт совместимости двух знаков зодиака.\n\n"
+        "Формат ответа (строго):\n"
+        "1. Общая совместимость — 2-3 предложения про стихии и энергии пары\n"
+        "2. Чувства и связь — 2 предложения про эмоциональную связь\n"
+        "3. Зоны роста — 2 предложения про возможные трения\n"
+        "4. Совет — 1-2 конкретные рекомендации\n\n"
+        "Правила:\n"
+        "- Тёплый, поддерживающий, но честный тон\n"
+        "- Адаптируй тон под тип отношений\n"
+        "- Не используй маркдаун, только текст и эмодзи\n"
+        "- Обращайся на «ты»\n"
+        "- Не пиши заголовки разделов — только текст через абзацы\n"
+    )
+    user_prompt = (
+        f"Составь отчёт совместимости.\n\n"
+        f"Пользователь: {user_sign_name} {user_sign['symbol']} "
+        f"(стихия: {user_sign['element']}, планета: {user_sign['planet']}, асцендент: {user_ascendant})\n"
+        f"Партнёр ({partner_name}): {partner_sign_name} {partner_sign['symbol']} "
+        f"(стихия: {partner_sign['element']}, планета: {partner_sign['planet']})\n"
+        f"Тип отношений: {type_labels.get(compat_type, 'романтическая')}\n"
+    )
+    try:
+        response = claude_client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        return response.content[0].text
+    except Exception as e:
+        logger.error(f"Claude compat API error: {e}")
+        return _fallback_compat(user_sign_name, partner_sign_name)
+
+# ──────────────────────────────────────────────────
+#  ПОСТРОЕНИЕ ТЕКСТОВ И КЛАВИАТУР
+# ──────────────────────────────────────────────────
+def _build_main_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💕 Проверить совместимость", callback_data="compat")],
+        [InlineKeyboardButton("🎁 Подарить гороскоп подруге", callback_data="gift")],
+        [InlineKeyboardButton("📲 Поделиться", callback_data="share"),
+         InlineKeyboardButton("🔄 Обновить", callback_data="refresh")],
+        [InlineKeyboardButton("👥 Пригласить подругу", callback_data="referral"),
+         InlineKeyboardButton("⭐ Мой рейтинг", callback_data="rating")],
+    ])
 
 def build_horoscope_text(sign: dict, ascendant: str) -> str:
     today = datetime.now().strftime("%-d %B %Y").lower()
-    # Capitalise first letter
     today = today[0].upper() + today[1:]
-    sign_name = next(k for k, v in SIGNS.items() if v is sign)
-
+    sign_name = get_sign_name(sign)
     return (
         f"🌙 <b>МОЙ АСТРОЛОГ</b>  ·  {today}\n\n"
         f"{sign['symbol']} <b>{sign_name}</b>  ·  <i>{sign['dates']}</i>\n"
@@ -448,7 +454,7 @@ def build_horoscope_text(sign: dict, ascendant: str) -> str:
 def build_share_text(sign: dict, ascendant: str) -> str:
     today = datetime.now().strftime("%-d %B").lower()
     today = today[0].upper() + today[1:]
-    sign_name = next(k for k, v in SIGNS.items() if v is sign)
+    sign_name = get_sign_name(sign)
     snippet = sign["main"][:120] + "..."
     return (
         f"✨ Мой гороскоп на {today}\n\n"
@@ -458,10 +464,101 @@ def build_share_text(sign: dict, ascendant: str) -> str:
         f"Напиши боту /start"
     )
 
+def build_compat_card(
+    user_sign_name: str, user_sign: dict,
+    partner_sign_name: str, partner_sign: dict,
+    partner_name: str, compat_type: str, pct: int, report: str,
+) -> str:
+    type_icons = {"romantic": "💕", "friendship": "👯", "family": "👨‍👩‍👧"}
+    type_labels = {"romantic": "Романтическая", "friendship": "Дружеская", "family": "Семейная"}
+    icon = type_icons.get(compat_type, "💕")
+    label = type_labels.get(compat_type, "")
+    filled = pct // 10
+    bar = "▰" * filled + "▱" * (10 - filled)
+    return (
+        f"🔮 <b>СОВМЕСТИМОСТЬ</b>\n\n"
+        f"{user_sign['symbol']} <b>{user_sign_name}</b>  +  "
+        f"{partner_sign['symbol']} <b>{partner_sign_name}</b> ({partner_name})\n"
+        f"{icon} <i>{label} совместимость</i>\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n\n"
+        f"📊 <b>Общая совместимость: {pct}%</b>\n"
+        f"{bar}\n\n"
+        f"{report}\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🌙 <i>Мой Астролог · Персональный отчёт</i>"
+    )
+
 # ──────────────────────────────────────────────────
-#  ХЭНДЛЕРЫ
+#  DEEP LINK ХЕЛПЕРЫ
+# ──────────────────────────────────────────────────
+async def _show_incoming_compat(update, _context, pending):
+    sender_name = pending["sender_name"]
+    pct = pending["pct"]
+    summary = pending["summary"]
+    text = (
+        f"💌 <b>{sender_name} проверила вашу совместимость!</b>\n\n"
+        f"📊 Результат: <b>{pct}%</b>\n\n"
+        f"{summary}\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🌙 Хочешь свой персональный гороскоп? Напиши /start"
+    )
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+async def _show_incoming_gift(update, _context, pending):
+    sender_name = pending["sender_name"]
+    horoscope_text = pending["horoscope_text"]
+    await update.message.reply_text(
+        f"🎁 <b>{sender_name} дарит тебе персональный гороскоп!</b>\n\n"
+        f"{horoscope_text}\n\n"
+        f"✨ <i>Хочешь получать гороскоп каждый день? Напиши /start</i>",
+        parse_mode=ParseMode.HTML,
+    )
+
+# ──────────────────────────────────────────────────
+#  ОСНОВНЫЕ ХЭНДЛЕРЫ
 # ──────────────────────────────────────────────────
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    args = context.args or []
+
+    # Обработка deep links
+    if args:
+        arg = args[0]
+        if arg.startswith("ref_"):
+            try:
+                referrer_id = int(arg[4:])
+                context.user_data["referrer_id"] = referrer_id
+            except ValueError:
+                pass
+
+        elif arg.startswith("compat_"):
+            pending = context.bot_data.get("pending_compat", {}).get(arg)
+            if pending:
+                await _show_incoming_compat(update, context, pending)
+            if context.user_data.get("sign"):
+                return CHAT
+
+        elif arg.startswith("gift_"):
+            pending = context.bot_data.get("pending_gifts", {}).get(arg)
+            if pending:
+                await _show_incoming_gift(update, context, pending)
+            if context.user_data.get("sign"):
+                return CHAT
+
+    # Если уже зарегистрирован — показать гороскоп
+    if context.user_data.get("sign"):
+        sign = context.user_data["sign"]
+        ascendant = context.user_data.get("ascendant", "Неизвестен")
+        horoscope_text = build_horoscope_text(sign, ascendant)
+        await update.message.reply_text(
+            horoscope_text, parse_mode=ParseMode.HTML,
+            reply_markup=_build_main_keyboard(),
+        )
+        await update.message.reply_text(
+            "💬 Задай мне любой вопрос — или нажми одну из кнопок выше ✨",
+        )
+        return CHAT
+
+    # Новый пользователь
     context.user_data.clear()
     await update.message.reply_text(
         "🌙 Привет! Я твой персональный астролог.\n\n"
@@ -479,7 +576,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def handle_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text
     birth_date = parse_date(text)
-
     if not birth_date:
         await update.message.reply_text(
             "Не могу разобрать дату 🙈\n\n"
@@ -488,17 +584,13 @@ async def handle_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             parse_mode=ParseMode.HTML,
         )
         return BIRTH_DATE
-
     context.user_data["birth_date"] = birth_date
-    sign = get_sign(birth_date)
-    sign_name = next(k for k, v in SIGNS.items() if v is sign)
-
     await update.message.reply_text(
-        f"✨ Записала!\n\n"
-        f"Теперь скажи, <b>в какое время ты родилась?</b>\n\n"
-        f"Напиши время в формате <code>ЧЧ:ММ</code>\n"
-        f"Например: <code>14:30</code>\n\n"
-        f"<i>Это нужно для точного расчёта твоего восходящего знака (асцендента)</i>",
+        "✨ Записала!\n\n"
+        "Теперь скажи, <b>в какое время ты родилась?</b>\n\n"
+        "Напиши время в формате <code>ЧЧ:ММ</code>\n"
+        "Например: <code>14:30</code>\n\n"
+        "<i>Это нужно для точного расчёта твоего восходящего знака (асцендента)</i>",
         parse_mode=ParseMode.HTML,
     )
     return BIRTH_TIME
@@ -507,7 +599,6 @@ async def handle_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 async def handle_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text
     birth_time = parse_time(text)
-
     if not birth_time:
         await update.message.reply_text(
             "Не могу разобрать время 🙈\n\n"
@@ -519,44 +610,48 @@ async def handle_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
     birth_date = context.user_data["birth_date"]
     context.user_data["birth_time"] = birth_time
-
     sign = get_sign(birth_date)
-    sign_name = next(k for k, v in SIGNS.items() if v is sign)
     ascendant = get_ascendant(birth_time)
     context.user_data["sign"] = sign
     context.user_data["ascendant"] = ascendant
 
-    # Loading message
+    # Реферальный бонус
+    user_id = update.effective_user.id
+    registered = context.bot_data.setdefault("registered_users", set())
+    if user_id not in registered:
+        registered.add(user_id)
+        referrer_id = context.user_data.get("referrer_id")
+        if referrer_id:
+            bonuses = context.bot_data.setdefault("referral_bonuses", {})
+            bonuses[referrer_id] = bonuses.get(referrer_id, 0) + 1
+            try:
+                await context.bot.send_message(
+                    referrer_id,
+                    "🎉 Твоя подруга зарегистрировалась по твоей ссылке!\n"
+                    "Ты получила +1 бесплатную проверку совместимости ✨"
+                )
+            except Exception:
+                pass
+
+    import asyncio
     loading_msg = await update.message.reply_text(
         "🔮 Анализирую твой натальный чарт...\n\n"
         "⏳ Запрашиваю прогноз у Павла Глобы...\n"
         "⏳ Проверяю у Василисы Володиной...\n"
         "⏳ Сверяю с картами Дарьи Мироновой..."
     )
-
-    import asyncio
     await asyncio.sleep(3)
 
-    # Send horoscope
     horoscope_text = build_horoscope_text(sign, ascendant)
-
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📲 Поделиться с подругой", callback_data="share")],
-        [InlineKeyboardButton("🔄 Обновить гороскоп", callback_data="refresh")],
-    ])
-
     await loading_msg.delete()
     await update.message.reply_text(
-        horoscope_text,
-        parse_mode=ParseMode.HTML,
-        reply_markup=keyboard,
+        horoscope_text, parse_mode=ParseMode.HTML,
+        reply_markup=_build_main_keyboard(),
     )
-
     await update.message.reply_text(
-        f"💬 Можешь задать мне любой вопрос — я отвечу как личный астролог, "
-        f"который знает твою карту.\n\n"
-        f"<i>Например: «Хороший ли сегодня день для важного разговора?» "
-        f"или «Что звёзды говорят о моих отношениях?»</i>",
+        "💬 Можешь задать мне любой вопрос — я отвечу как личный астролог, "
+        "который знает твою карту.\n\n"
+        "<i>Или нажми одну из кнопок выше — например, проверь совместимость!</i>",
         parse_mode=ParseMode.HTML,
     )
     return CHAT
@@ -565,17 +660,349 @@ async def handle_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 async def handle_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text
     sign = context.user_data.get("sign")
-
     if not sign:
         await update.message.reply_text("Напиши /start чтобы начать заново.")
         return BIRTH_DATE
-
     ascendant = context.user_data.get("ascendant", "Неизвестен")
     response = ask_claude(text, sign, ascendant)
     await update.message.reply_text(f"🌙 {response}")
     return CHAT
 
+# ──────────────────────────────────────────────────
+#  СОВМЕСТИМОСТЬ: ХЭНДЛЕРЫ
+# ──────────────────────────────────────────────────
+async def handle_compat_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not context.user_data.get("sign"):
+        await query.message.reply_text("Напиши /start чтобы начать.")
+        return
 
+    # Проверка лимита
+    user_id = update.effective_user.id
+    checks_used = context.user_data.get("compat_checks_used", 0)
+    bonus = context.bot_data.get("referral_bonuses", {}).get(user_id, 0)
+    free_limit = 1 + bonus
+    if checks_used >= free_limit:
+        await query.message.reply_text(
+            "🔒 Ты уже использовала бесплатную проверку.\n\n"
+            "Пригласи подругу — и получи ещё одну бесплатно! 🎁",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("👥 Пригласить подругу", callback_data="referral")],
+            ]),
+        )
+        return
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💕 Романтическая", callback_data="compat_type:romantic")],
+        [InlineKeyboardButton("👯 Дружеская", callback_data="compat_type:friendship")],
+        [InlineKeyboardButton("👨‍👩‍👧 Семейная", callback_data="compat_type:family")],
+    ])
+    await query.message.reply_text(
+        "🔮 <b>Проверка совместимости</b>\n\n"
+        "Выбери тип отношений:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=keyboard,
+    )
+
+
+async def handle_compat_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    compat_type = query.data.split(":")[1]
+    context.user_data["compat_type"] = compat_type
+    type_labels = {"romantic": "романтическую", "friendship": "дружескую", "family": "семейную"}
+    await query.message.reply_text(
+        f"✨ Проверяем {type_labels.get(compat_type, '')} совместимость.\n\n"
+        "Напиши <b>имя</b> этого человека:",
+        parse_mode=ParseMode.HTML,
+    )
+    return COMPAT_NAME
+
+
+async def handle_compat_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    name = update.message.text.strip()
+    context.user_data["compat_partner_name"] = name
+    await update.message.reply_text(
+        f"Записала! Теперь напиши <b>дату рождения</b> {name}.\n\n"
+        "Формат: <code>ДД.ММ.ГГГГ</code>\n"
+        "Например: <code>15.03.1990</code>",
+        parse_mode=ParseMode.HTML,
+    )
+    return COMPAT_DATE
+
+
+async def handle_compat_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    partner_date = parse_date(text)
+    if not partner_date:
+        await update.message.reply_text(
+            "Не могу разобрать дату 🙈\nНапиши в формате <code>ДД.ММ.ГГГГ</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return COMPAT_DATE
+
+    import asyncio
+    partner_sign = get_sign(partner_date)
+    partner_sign_name = get_sign_name(partner_sign)
+    user_sign = context.user_data["sign"]
+    user_sign_name = get_sign_name(user_sign)
+    compat_type = context.user_data.get("compat_type", "romantic")
+    partner_name = context.user_data.get("compat_partner_name", "Партнёр")
+    user_ascendant = context.user_data.get("ascendant", "Неизвестен")
+
+    loading = await update.message.reply_text(
+        "🔮 Анализирую совместимость ваших карт...\n\n"
+        "⏳ Сверяю стихии и планеты..."
+    )
+    await asyncio.sleep(2)
+
+    report = ask_claude_compat(
+        user_sign_name, user_sign,
+        partner_sign_name, partner_sign,
+        compat_type, partner_name, user_ascendant,
+    )
+    pct = _calc_compat_pct(user_sign, partner_sign)
+
+    # Сохранить в историю
+    context.user_data.setdefault("compat_history", []).append({
+        "name": partner_name, "sign_name": partner_sign_name,
+        "type": compat_type, "pct": pct,
+    })
+    context.user_data["compat_checks_used"] = context.user_data.get("compat_checks_used", 0) + 1
+
+    # Сохранить для шаринга
+    check_id = hashlib.md5(f"{update.effective_user.id}_{datetime.now().isoformat()}".encode()).hexdigest()[:8]
+    payload_key = f"compat_{update.effective_user.id}_{check_id}"
+    context.bot_data.setdefault("pending_compat", {})[payload_key] = {
+        "sender_id": update.effective_user.id,
+        "sender_name": update.effective_user.first_name,
+        "sender_sign": user_sign_name,
+        "partner_sign": partner_sign_name,
+        "partner_name": partner_name,
+        "compat_type": compat_type,
+        "pct": pct,
+        "summary": report,
+    }
+
+    card = build_compat_card(
+        user_sign_name, user_sign,
+        partner_sign_name, partner_sign,
+        partner_name, compat_type, pct, report,
+    )
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"📲 Отправить {partner_name} результат", callback_data=f"compat_share:{payload_key}")],
+        [InlineKeyboardButton("🔄 Проверить с другим", callback_data="compat"),
+         InlineKeyboardButton("⭐ Мой рейтинг", callback_data="rating")],
+    ])
+
+    await loading.delete()
+    await update.message.reply_text(card, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+    return CHAT
+
+# ──────────────────────────────────────────────────
+#  ВИРАЛЬНЫЕ МЕХАНИКИ
+# ──────────────────────────────────────────────────
+
+# Механика 1: Поделиться совместимостью
+async def handle_compat_share(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    payload_key = query.data.split(":", 1)[1]
+    pending = context.bot_data.get("pending_compat", {}).get(payload_key)
+    if not pending:
+        await query.message.reply_text("Результат не найден. Попробуй проверить ещё раз.")
+        return
+    bot_me = await context.bot.get_me()
+    url = f"https://t.me/{bot_me.username}?start={payload_key}"
+    partner_name = pending.get("partner_name", "")
+    pct = pending.get("pct", 0)
+    share_text = (
+        f"✨ {pending['sender_name']} проверила вашу совместимость!\n\n"
+        f"{pending['sender_sign']} + {pending['partner_sign']} = {pct}%\n\n"
+        f"🔮 Узнай подробности:\n{url}"
+    )
+    await query.message.reply_text(
+        f"📲 <b>Скопируй и отправь {partner_name}:</b>\n\n{share_text}",
+        parse_mode=ParseMode.HTML,
+    )
+
+# Механика 2: Реферальная ссылка
+async def handle_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = update.effective_user.id
+    bot_me = await context.bot.get_me()
+    url = f"https://t.me/{bot_me.username}?start=ref_{user_id}"
+    bonus_count = context.bot_data.get("referral_bonuses", {}).get(user_id, 0)
+    await query.message.reply_text(
+        f"👥 <b>Пригласи подругу — получи бесплатные проверки!</b>\n\n"
+        f"Твоя личная ссылка:\n{url}\n\n"
+        f"Когда подруга зарегистрируется — вы обе получите бонус ✨\n\n"
+        f"📊 Приглашено подруг: <b>{bonus_count}</b>\n"
+        f"🎁 Бонусных проверок: <b>{bonus_count}</b>",
+        parse_mode=ParseMode.HTML,
+    )
+
+# Механика 3: Совместимость в группе
+async def cmd_group_compat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type not in ("group", "supergroup"):
+        await update.message.reply_text("Эта команда работает только в групповых чатах!")
+        return
+    group_id = update.effective_chat.id
+    group_members = context.bot_data.get("group_members", {}).get(group_id, {})
+    if len(group_members) < 2:
+        await update.message.reply_text(
+            "🌙 Для совместимости дня нужно минимум 2 участника!\n\n"
+            "Каждый участник должен написать мне в ЛС /start, "
+            "а затем написать /join_group в этом чате."
+        )
+        return
+    members = list(group_members.items())
+    random.shuffle(members)
+    (_, data1), (_, data2) = members[0], members[1]
+    pct = _calc_compat_pct(SIGNS[data1["sign"]], SIGNS[data2["sign"]])
+    await update.message.reply_text(
+        f"🔮 <b>Совместимость дня в чате!</b>\n\n"
+        f"{SIGNS[data1['sign']]['symbol']} <b>{data1['name']}</b> ({data1['sign']})\n"
+        f"  +\n"
+        f"{SIGNS[data2['sign']]['symbol']} <b>{data2['name']}</b> ({data2['sign']})\n\n"
+        f"📊 Совместимость: <b>{pct}%</b> 🔥\n\n"
+        f"🌙 <i>Хочешь свою проверку? Напиши мне в ЛС /start</i>",
+        parse_mode=ParseMode.HTML,
+    )
+
+async def cmd_join_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type not in ("group", "supergroup"):
+        return
+    user_sign = context.user_data.get("sign")
+    if not user_sign:
+        await update.message.reply_text("Сначала зарегистрируйся: напиши мне /start в ЛС!")
+        return
+    group_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    sign_name = get_sign_name(user_sign)
+    groups = context.bot_data.setdefault("group_members", {})
+    groups.setdefault(group_id, {})[user_id] = {
+        "name": update.effective_user.first_name,
+        "sign": sign_name,
+    }
+    await update.message.reply_text(
+        f"✅ {update.effective_user.first_name}, ты в игре! ({sign_name} {user_sign['symbol']})"
+    )
+
+# Механика 4: Астро-подарок
+async def handle_gift_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    if not context.user_data.get("sign"):
+        await query.message.reply_text("Напиши /start чтобы начать.")
+        return CHAT
+    await query.message.reply_text(
+        "🎁 <b>Астро-подарок подруге</b>\n\n"
+        "Напиши <b>имя</b> подруги, которой хочешь подарить гороскоп:",
+        parse_mode=ParseMode.HTML,
+    )
+    return GIFT_NAME
+
+async def handle_gift_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    name = update.message.text.strip()
+    context.user_data["gift_partner_name"] = name
+    await update.message.reply_text(
+        f"Записала! Теперь напиши <b>дату рождения</b> {name}.\n\n"
+        "Формат: <code>ДД.ММ.ГГГГ</code>",
+        parse_mode=ParseMode.HTML,
+    )
+    return GIFT_DATE
+
+async def handle_gift_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    partner_date = parse_date(text)
+    if not partner_date:
+        await update.message.reply_text(
+            "Не могу разобрать дату 🙈 Напиши в формате <code>ДД.ММ.ГГГГ</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return GIFT_DATE
+
+    partner_sign = get_sign(partner_date)
+    partner_name = context.user_data.get("gift_partner_name", "Подруга")
+    horoscope_text = build_horoscope_text(partner_sign, "Неизвестен")
+
+    gift_id = hashlib.md5(f"gift_{update.effective_user.id}_{datetime.now().isoformat()}".encode()).hexdigest()[:8]
+    payload_key = f"gift_{update.effective_user.id}_{gift_id}"
+    context.bot_data.setdefault("pending_gifts", {})[payload_key] = {
+        "sender_id": update.effective_user.id,
+        "sender_name": update.effective_user.first_name,
+        "partner_name": partner_name,
+        "horoscope_text": horoscope_text,
+    }
+
+    bot_me = await context.bot.get_me()
+    url = f"https://t.me/{bot_me.username}?start={payload_key}"
+    await update.message.reply_text(
+        f"🎁 <b>Подарок для {partner_name} готов!</b>\n\n"
+        f"Отправь эту ссылку {partner_name}:\n{url}\n\n"
+        f"<i>Она получит персональный гороскоп и приглашение в бот ✨</i>",
+        parse_mode=ParseMode.HTML,
+    )
+    return CHAT
+
+# Механика 5: Звёздный рейтинг
+async def handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    history = context.user_data.get("compat_history", [])
+    if not history:
+        await query.message.reply_text(
+            "⭐ У тебя пока нет проверок совместимости.\n\n"
+            "Нажми «Проверить совместимость» чтобы начать!"
+        )
+        return
+    sorted_history = sorted(history, key=lambda x: x["pct"], reverse=True)
+    lines = []
+    for i, entry in enumerate(sorted_history, 1):
+        medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"{i}.")
+        type_icon = {"romantic": "💕", "friendship": "👯", "family": "👨‍👩‍👧"}.get(entry["type"], "")
+        sign_data = SIGNS.get(entry["sign_name"], {})
+        symbol = sign_data.get("symbol", "")
+        lines.append(f"{medal} <b>{entry['name']}</b> ({symbol} {entry['sign_name']}) — {entry['pct']}% {type_icon}")
+    text = (
+        "⭐ <b>ТВОЙ ЗВЁЗДНЫЙ РЕЙТИНГ</b>\n\n"
+        + "\n".join(lines)
+        + "\n\n━━━━━━━━━━━━━━━━━━\n"
+        "🔮 <i>Проверь ещё — дополни рейтинг!</i>"
+    )
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💕 Проверить ещё", callback_data="compat")],
+        [InlineKeyboardButton("📲 Поделиться рейтингом", callback_data="share_rating")],
+    ])
+    await query.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+
+async def handle_share_rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    history = context.user_data.get("compat_history", [])
+    if not history:
+        return
+    sorted_history = sorted(history, key=lambda x: x["pct"], reverse=True)[:3]
+    lines = []
+    for i, entry in enumerate(sorted_history, 1):
+        medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, "")
+        lines.append(f"{medal} {entry['name']} — {entry['pct']}%")
+    share_text = (
+        "⭐ Мой звёздный рейтинг совместимости:\n\n"
+        + "\n".join(lines)
+        + "\n\n🌙 Проверь свою совместимость: напиши /start боту"
+    )
+    await query.message.reply_text(
+        f"📲 <b>Скопируй и отправь подругам:</b>\n\n{share_text}",
+        parse_mode=ParseMode.HTML,
+    )
+
+# ──────────────────────────────────────────────────
+#  КНОПКИ: ПОДЕЛИТЬСЯ / ОБНОВИТЬ
+# ──────────────────────────────────────────────────
 async def handle_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -584,14 +1011,11 @@ async def handle_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not sign:
         await query.message.reply_text("Напиши /start чтобы начать заново.")
         return
-
     horoscope_text = build_horoscope_text(sign, ascendant)
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📲 Поделиться с подругой", callback_data="share")],
-        [InlineKeyboardButton("🔄 Обновить гороскоп", callback_data="refresh")],
-    ])
-    await query.message.reply_text(horoscope_text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
-
+    await query.message.reply_text(
+        horoscope_text, parse_mode=ParseMode.HTML,
+        reply_markup=_build_main_keyboard(),
+    )
 
 async def handle_share(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -606,27 +1030,45 @@ async def handle_share(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.HTML,
     )
 
-
-async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ──────────────────────────────────────────────────
+#  РОУТЕР КНОПОК И КОМАНДЫ
+# ──────────────────────────────────────────────────
+async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     data = update.callback_query.data
+
     if data == "share":
         await handle_share(update, context)
     elif data == "refresh":
         await handle_refresh(update, context)
+    elif data == "compat":
+        await handle_compat_start(update, context)
+    elif data.startswith("compat_type:"):
+        return await handle_compat_type(update, context)
+    elif data.startswith("compat_share:"):
+        await handle_compat_share(update, context)
+    elif data == "gift":
+        return await handle_gift_start(update, context)
+    elif data == "referral":
+        await handle_referral(update, context)
+    elif data == "rating":
+        await handle_rating(update, context)
+    elif data == "share_rating":
+        await handle_share_rating(update, context)
+
+    return CHAT
 
 
 async def cmd_horoscope(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Повторно показывает гороскоп"""
     sign = context.user_data.get("sign")
     ascendant = context.user_data.get("ascendant", "Неизвестен")
     if not sign:
         await update.message.reply_text("Напиши /start — введём твои данные и составим гороскоп!")
         return
     horoscope_text = build_horoscope_text(sign, ascendant)
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📲 Поделиться с подругой", callback_data="share")],
-    ])
-    await update.message.reply_text(horoscope_text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+    await update.message.reply_text(
+        horoscope_text, parse_mode=ParseMode.HTML,
+        reply_markup=_build_main_keyboard(),
+    )
 
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -643,24 +1085,39 @@ def main():
         print("Добавь в файл .env строку: BOT_TOKEN=твой_токен\n")
         return
 
-    app = Application.builder().token(BOT_TOKEN).build()
+    persistence = PicklePersistence(filepath="bot_data.pickle")
+    app = Application.builder().token(BOT_TOKEN).persistence(persistence).build()
 
     conv = ConversationHandler(
         entry_points=[CommandHandler("start", cmd_start)],
         states={
-            BIRTH_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_date)],
-            BIRTH_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_time)],
-            CHAT:       [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_chat)],
+            BIRTH_DATE:  [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_date)],
+            BIRTH_TIME:  [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_time)],
+            CHAT: [
+                CallbackQueryHandler(callback_router),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_chat),
+            ],
+            COMPAT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_compat_name)],
+            COMPAT_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_compat_date)],
+            GIFT_NAME:   [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_gift_name)],
+            GIFT_DATE:   [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_gift_date)],
         },
-        fallbacks=[CommandHandler("cancel", cmd_cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cmd_cancel),
+            CommandHandler("start", cmd_start),
+        ],
         allow_reentry=True,
+        name="main_conv",
+        persistent=True,
     )
 
     app.add_handler(conv)
     app.add_handler(CommandHandler("horoscope", cmd_horoscope))
+    app.add_handler(CommandHandler("group_compat", cmd_group_compat))
+    app.add_handler(CommandHandler("join_group", cmd_join_group))
     app.add_handler(CallbackQueryHandler(callback_router))
 
-    print("✅ Бот запущен. Нажми Ctrl+C для остановки.")
+    print("✅ Бот v2 запущен. Нажми Ctrl+C для остановки.")
     app.run_polling(drop_pending_updates=True)
 
 
