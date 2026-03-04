@@ -5,13 +5,16 @@
 Запуск: python3 bot.py
 """
 
+import json
 import logging
 import os
 import re
 import random
 import hashlib
-from datetime import date, datetime
+from datetime import date, datetime, time as dtime
 from pathlib import Path
+from typing import Optional
+from zoneinfo import ZoneInfo
 
 # Загружаем .env если есть
 _env_path = Path(__file__).parent / ".env"
@@ -40,6 +43,8 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
+# На Railway данные хранятся на volume → PICKLE_PATH=/data/bot_data.pickle
+PICKLE_PATH = os.getenv("PICKLE_PATH", str(Path(__file__).parent / "bot_data.pickle"))
 
 # ──────────────────────────────────────────────────
 #  СОСТОЯНИЯ ДИАЛОГА
@@ -227,6 +232,289 @@ SIGNS = {
 ASCENDANTS = ["Овен","Телец","Близнецы","Рак","Лев","Дева","Весы","Скорпион","Стрелец","Козерог","Водолей","Рыбы"]
 
 # ──────────────────────────────────────────────────
+#  ЛУННЫЙ КАЛЕНДАРЬ: ДАННЫЕ
+# ──────────────────────────────────────────────────
+MOON_SIGN_INFO = {
+    "Овен": {
+        "symbol": "♈", "emoji": "🔥",
+        "desc": "Луна в Овне даёт тебе яркий внутренний огонь, смелость и умение действовать быстро. Ты чувствуешь мир интенсивно и реагируешь мгновенно. Эмоции — твоя движущая сила."
+    },
+    "Телец": {
+        "symbol": "♉", "emoji": "🌿",
+        "desc": "Луна в Тельце — знак устойчивой, глубокой чувственности. Ты ценишь стабильность, уют и красоту. Твои эмоции медленно разгораются, но очень глубоки и преданны."
+    },
+    "Близнецы": {
+        "symbol": "♊", "emoji": "💨",
+        "desc": "Луна в Близнецах делает тебя эмоционально живой и любопытной. Ты легко переключаешься, умеешь говорить о чувствах и находишь радость в общении и информации."
+    },
+    "Рак": {
+        "symbol": "♋", "emoji": "💧",
+        "desc": "Луна в Раке — её родной дом. Ты глубоко чуткая, интуитивная и защищающая. Семья и близкие — твоя настоящая вселенная. Память и прошлое питают твою душу."
+    },
+    "Лев": {
+        "symbol": "♌", "emoji": "✨",
+        "desc": "Луна в Льве наполняет тебя теплом и потребностью любить и быть любимой. Ты щедра на чувства, ярка в эмоциях и хочешь, чтобы твоя душа сияла для других."
+    },
+    "Дева": {
+        "symbol": "♍", "emoji": "🌾",
+        "desc": "Луна в Деве говорит о внимательной, анализирующей натуре. Ты выражаешь заботу через помощь и порядок. Эмоции ты обрабатываешь через разум и практические действия."
+    },
+    "Весы": {
+        "symbol": "♎", "emoji": "⚖️",
+        "desc": "Луна в Весах — ты создана для гармонии и красоты в отношениях. Тебе важно равновесие и справедливость. Ты чувствуешь себя целой только рядом с тем, кого любишь."
+    },
+    "Скорпион": {
+        "symbol": "♏", "emoji": "🌊",
+        "desc": "Луна в Скорпионе — самая глубокая и интенсивная. Твои чувства бездонны. Ты умеешь видеть правду там, где другие не замечают. Трансформация — твоя суперсила."
+    },
+    "Стрелец": {
+        "symbol": "♐", "emoji": "🎯",
+        "desc": "Луна в Стрельце дарит тебе жажду приключений и свободы чувств. Ты оптимистична, открыта новому и вдохновляешь других своей искренностью и широтой души."
+    },
+    "Козерог": {
+        "symbol": "♑", "emoji": "🏔️",
+        "desc": "Луна в Козероге говорит о сдержанных, но очень преданных чувствах. Ты надёжна и серьёзна в привязанностях. Твои эмоции — это действия и верность на годы."
+    },
+    "Водолей": {
+        "symbol": "♒", "emoji": "⚡",
+        "desc": "Луна в Водолее делает тебя независимой в чувствах и открытой. Ты любишь умом и ценишь свободу. Твоя эмоциональная мудрость помогает другим видеть мир шире."
+    },
+    "Рыбы": {
+        "symbol": "♓", "emoji": "🌙",
+        "desc": "Луна в Рыбах — ты проницаема для чужих эмоций. Твоя чуткость граничит с даром предвидения. Мечты и интуиция — твои главные навигаторы в жизни."
+    },
+}
+
+MOON_PHASES = [
+    (1.85,  "🌑 Новолуние",        "Новолуние — время новых начал. Ты рождена сеять семена желаний."),
+    (5.54,  "🌒 Растущий серп",    "Растущий серп — время набора силы и движения вперёд."),
+    (9.22,  "🌓 Первая четверть",  "Первая четверть — время решительных действий и преодоления."),
+    (12.91, "🌔 Прибывающая луна", "Прибывающая луна — интуиция и творчество на пике."),
+    (16.61, "🌕 Полнолуние",       "Полнолуние — кульминация, эмоции и откровения. Ты рождена ярко светить."),
+    (20.30, "🌖 Убывающая луна",   "Убывающая луна — время мудрости и щедрости, делиться опытом."),
+    (23.99, "🌗 Последняя четверть","Последняя четверть — время переосмысления и внутренней работы."),
+    (29.53, "🌘 Тёмный серп",      "Тёмный серп — время отдыха, интроспекции и подготовки к обновлению."),
+]
+
+# ──────────────────────────────────────────────────
+#  НУМЕРОЛОГИЯ: ДАННЫЕ
+# ──────────────────────────────────────────────────
+NUMEROLOGY = {
+    1:  {"name": "Единица",         "keyword": "Лидер",            "emoji": "☀️",
+         "desc": "Ты рождена вести за собой. Твоя сила — в независимости, смелости и умении начинать с чистого листа. Ты первопроходец, и мир замечает твою энергию.",
+         "strong": "Воля, инициатива, харизма, самодостаточность.",
+         "grow": "Научись принимать помощь — сила не значит одиночество."},
+    2:  {"name": "Двойка",          "keyword": "Дипломат",         "emoji": "🌙",
+         "desc": "Ты создана для гармонии и союзов. Твоя суперсила — умение слышать, объединять и находить баланс там, где другие видят только конфликт.",
+         "strong": "Чуткость, терпение, партнёрство, интуиция.",
+         "grow": "Учись говорить о своих потребностях — твои желания тоже важны."},
+    3:  {"name": "Тройка",          "keyword": "Творец",           "emoji": "✨",
+         "desc": "Ты — воплощение творческой энергии. Слова, образы, идеи рождаются в тебе легко. Мир становится ярче, когда ты выражаешь себя.",
+         "strong": "Творчество, общение, оптимизм, вдохновение.",
+         "grow": "Доводи начатое до конца — твои идеи заслуживают воплощения."},
+    4:  {"name": "Четвёрка",        "keyword": "Строитель",        "emoji": "🏛️",
+         "desc": "Ты — основа и надёжность. Там, где ты, всё устроено и стоит на прочном фундаменте. Твоя верность и трудолюбие — редкий дар.",
+         "strong": "Дисциплина, надёжность, практичность, верность.",
+         "grow": "Позволяй себе отдыхать — даже самый крепкий фундамент нуждается в уходе."},
+    5:  {"name": "Пятёрка",         "keyword": "Искатель",         "emoji": "🌟",
+         "desc": "Ты рождена для перемен и открытий. Свобода — твой воздух. Ты умеешь адаптироваться быстрее всех и находить возможности там, где другие видят хаос.",
+         "strong": "Адаптивность, смелость, энергичность, любопытство.",
+         "grow": "Учись находить глубину в постоянстве — корни дают силу для полёта."},
+    6:  {"name": "Шестёрка",        "keyword": "Хранитель",        "emoji": "💕",
+         "desc": "Ты несёшь в мир красоту, заботу и гармонию. Твоё сердце открыто, и люди тянутся к тебе за теплом и поддержкой. Ты создаёшь дом везде, где появляешься.",
+         "strong": "Любовь, забота, ответственность, красота.",
+         "grow": "Помни: сначала надеть маску на себя. Ты не можешь дарить то, чего у тебя нет."},
+    7:  {"name": "Семёрка",         "keyword": "Мудрец",           "emoji": "🔮",
+         "desc": "Ты — искатель истины. Твой ум глубок, интуиция точна, и ты видишь то, что скрыто от других. Духовный мир и знание — твоя настоящая родина.",
+         "strong": "Аналитика, интуиция, глубина, мудрость.",
+         "grow": "Открывайся людям — твои инсайты меняют жизни, если ты ими делишься."},
+    8:  {"name": "Восьмёрка",       "keyword": "Созидатель",       "emoji": "♾️",
+         "desc": "Ты рождена для масштаба. Власть, деньги, влияние — в твоих руках они становятся инструментами созидания. Ты умеешь превращать идеи в реальные результаты.",
+         "strong": "Амбиции, лидерство, деловая хватка, решительность.",
+         "grow": "Помни о балансе материального и духовного — именно он даёт настоящее удовлетворение."},
+    9:  {"name": "Девятка",         "keyword": "Гуманист",         "emoji": "🌍",
+         "desc": "Ты несёшь в себе мудрость всех предыдущих чисел. Твоя душа широка как мир, ты видишь красоту в каждом человеке. Призвание — служить, вдохновлять, исцелять.",
+         "strong": "Сострадание, широта души, мудрость, альтруизм.",
+         "grow": "Не растворяйся в других полностью — твоя индивидуальность тоже важна."},
+    11: {"name": "Мастер-число 11", "keyword": "Провидец",         "emoji": "⚡",
+         "desc": "11 — высшая интуиция. Ты рождена улавливать то, что другие не слышат. Твоя чуткость граничит с даром ясновидения. Ты здесь, чтобы вдохновлять и освещать путь.",
+         "strong": "Интуиция, вдохновение, духовность, чувствительность.",
+         "grow": "Заземляйся — твоя тонкость требует крепкого фундамента в реальном мире."},
+    22: {"name": "Мастер-число 22", "keyword": "Мастер-строитель", "emoji": "🏗️",
+         "desc": "22 — самое мощное из всех чисел. Ты способна воплощать в жизнь самые грандиозные мечты. Твои возможности безграничны, если ты веришь в свою силу.",
+         "strong": "Масштаб, видение, воплощение, лидерство.",
+         "grow": "Не позволяй грандиозности целей парализовать тебя — начни с первого шага."},
+    33: {"name": "Мастер-число 33", "keyword": "Мастер-учитель",   "emoji": "🕊️",
+         "desc": "33 — число бескорыстной любви и высшего служения. Ты здесь, чтобы нести свет и исцеление. Твоё присутствие меняет людей к лучшему.",
+         "strong": "Любовь, исцеление, мудрость, самоотдача.",
+         "grow": "Принимай заботу других — ты тоже заслуживаешь любви и поддержки."},
+}
+
+
+def _reduce_num(n: int) -> int:
+    """Сводит число к однозначному или мастер-числу (11, 22, 33)."""
+    while n > 9 and n not in (11, 22, 33):
+        n = sum(int(d) for d in str(n))
+    return n
+
+
+def calc_life_path(birth_date: date) -> int:
+    """Вычисляет число жизненного пути (Пифагорейский метод)."""
+    day   = _reduce_num(birth_date.day)
+    month = _reduce_num(birth_date.month)
+    year  = _reduce_num(sum(int(d) for d in str(birth_date.year)))
+    return _reduce_num(day + month + year)
+
+
+def build_numerology_text(birth_date: date, gender: str = "female") -> str:
+    number = calc_life_path(birth_date)
+    data = NUMEROLOGY[number]
+    desc = _adapt_gender(data["desc"], gender)
+    grow = _adapt_gender(data["grow"], gender)
+    return (
+        f"🔢 <b>ЧИСЛО ЖИЗНЕННОГО ПУТИ — {number}</b>\n"
+        f"{data['emoji']} <b>{data['name']} · {data['keyword']}</b>\n\n"
+        f"{desc}\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n\n"
+        f"✅ <b>Твои сильные стороны:</b>\n{data['strong']}\n\n"
+        f"🌱 <b>Точка роста:</b>\n{grow}\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🔮 <i>Мой Астролог · Нумерология</i>"
+    )
+
+
+# ──────────────────────────────────────────────────
+#  ГЕНДЕРНАЯ АДАПТАЦИЯ
+# ──────────────────────────────────────────────────
+# Мужские имена, оканчивающиеся на А/Я (исключения)
+_MALE_NAMES_A_YA = {
+    "никита", "лука", "илья", "фома", "кузьма", "савва",
+    "яша", "миша", "коля", "ваня", "саня", "толя",
+    "витя", "петя", "серёжа", "алёша", "лёша", "гоша",
+    "стёпа", "федя", "тёма", "дима",
+}
+# Нейтральные (и Женя/Саша могут быть любого пола) → по умолчанию женский
+_NEUTRAL_NAMES = {"женя", "саша", "валя", "шура", "женечка"}
+
+
+def detect_gender(name: str) -> str:
+    """Определяет гендер пользователя по имени. Возвращает 'male' или 'female'."""
+    if not name:
+        return "female"
+    n = name.lower().strip()
+    if n in _MALE_NAMES_A_YA:
+        return "male"
+    if n in _NEUTRAL_NAMES:
+        return "female"
+    if n.endswith(("а", "я")):
+        return "female"
+    return "male"
+
+
+# Замены женских форм на мужские
+_GENDER_REPLACEMENTS = (
+    ("рождена", "рождён"),
+    ("создана", "создан"),
+    ("способна", "способен"),
+    ("щедра на", "щедр на"),
+    ("ярка в", "ярок в"),
+    ("оптимистична", "оптимистичен"),
+    ("открыта новому", "открыт новому"),
+    ("проницаема", "проницаем"),
+    ("широка как", "широк как"),
+    ("целой только", "целым только"),
+    ("эмоционально живой и любопытной", "эмоционально живым и любопытным"),
+    ("глубоко чуткая, интуитивная и защищающая", "глубоко чуткий, интуитивный и защищающий"),
+    ("независимой в чувствах и открытой", "независимым в чувствах и открытым"),
+)
+
+
+def _adapt_gender(text: str, gender: str) -> str:
+    """Адаптирует текст под нужный гендер."""
+    if gender != "male":
+        return text
+    for fem, mas in _GENDER_REPLACEMENTS:
+        text = text.replace(fem, mas)
+    return text
+
+
+def get_lunar_data(birth_date: date) -> dict:
+    """Рассчитывает лунный знак, лунный день и фазу Луны на дату рождения."""
+    # Вычисляем Юлианский день (полдень)
+    y, m, d = birth_date.year, birth_date.month, birth_date.day
+    a = (14 - m) // 12
+    yy = y + 4800 - a
+    mm = m + 12 * a - 3
+    jd = (d + (153 * mm + 2) // 5 + 365 * yy + yy // 4
+          - yy // 100 + yy // 400 - 32045) - 0.5
+
+    # Опорное новолуние: 6 января 2000 г., 18:14 UTC → JD ≈ 2451550.26
+    ref_new_moon_jd = 2451550.26
+    lunar_cycle = 29.53058867
+
+    days_since = jd - ref_new_moon_jd
+    phase_days = days_since % lunar_cycle
+    if phase_days < 0:
+        phase_days += lunar_cycle
+
+    # Лунный день (1–30)
+    lunar_day = int(phase_days) + 1
+    if lunar_day > 30:
+        lunar_day = 30
+
+    # Фаза Луны
+    phase_name = MOON_PHASES[-1][1]
+    phase_desc = MOON_PHASES[-1][2]
+    for limit, name, desc in MOON_PHASES:
+        if phase_days < limit:
+            phase_name = name
+            phase_desc = desc
+            break
+
+    # Знак Луны (приблизительное положение через среднее движение)
+    # На дату опорного новолуния Луна и Солнце были в ~285.7° (Козерог)
+    ref_moon_lon = 285.7
+    moon_speed = 360.0 / lunar_cycle  # °/день
+    moon_lon = (ref_moon_lon + moon_speed * days_since) % 360
+    if moon_lon < 0:
+        moon_lon += 360
+    moon_sign_names = [
+        "Овен", "Телец", "Близнецы", "Рак", "Лев", "Дева",
+        "Весы", "Скорпион", "Стрелец", "Козерог", "Водолей", "Рыбы"
+    ]
+    moon_sign_name = moon_sign_names[int(moon_lon / 30) % 12]
+    moon_sign = MOON_SIGN_INFO[moon_sign_name]
+
+    return {
+        "lunar_day": lunar_day,
+        "phase_name": phase_name,
+        "phase_desc": phase_desc,
+        "moon_sign_name": moon_sign_name,
+        "moon_sign": moon_sign,
+    }
+
+
+def build_lunar_birthday_text(birth_date: date, gender: str = "female") -> str:
+    data = get_lunar_data(birth_date)
+    sign = data["moon_sign"]
+    desc = _adapt_gender(sign["desc"], gender)
+    return (
+        f"🌙 <b>ТВОЙ ЛУННЫЙ ДЕНЬ РОЖДЕНИЯ</b>\n\n"
+        f"📅 Дата по григорианскому календарю: <b>{birth_date.strftime('%d.%m.%Y')}</b>\n"
+        f"🌙 Лунный день: <b>{data['lunar_day']}</b>\n"
+        f"✨ Фаза Луны: <b>{data['phase_name']}</b>\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n\n"
+        f"{sign['symbol']} <b>ЗНАК ЛУНЫ — {data['moon_sign_name'].upper()}</b> {sign['emoji']}\n\n"
+        f"{desc}\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n\n"
+        f"🔮 <b>Послание твоей Луны:</b>\n"
+        f"<i>{data['phase_desc']}</i>\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🌙 <i>Мой Астролог · Лунный гороскоп</i>"
+    )
+
+
+# ──────────────────────────────────────────────────
 #  АСТРОЛОГИЧЕСКИЕ ФУНКЦИИ
 # ──────────────────────────────────────────────────
 def get_sign(birth_date: date) -> dict:
@@ -329,25 +617,44 @@ def _fallback_compat(user_sign_name: str, partner_sign_name: str) -> str:
 # ──────────────────────────────────────────────────
 #  CLAUDE AI
 # ──────────────────────────────────────────────────
-def ask_claude(question: str, sign: dict, ascendant: str) -> str:
+def ask_claude(question: str, sign: dict, ascendant: str,
+               gender: str = "female", birth_date=None) -> str:
     if not claude_client:
         return "Прислушайся к своей интуиции — она сейчас особенно точна."
     sign_name = get_sign_name(sign)
+    gender_note = "мужчина" if gender == "male" else "женщина"
+
+    # Нумерологический контекст — если есть дата рождения
+    if birth_date:
+        lp_num = calc_life_path(birth_date)
+        lp_data = NUMEROLOGY[lp_num]
+        numerology_block = (
+            f"\nНумерология пользователя:\n"
+            f"- Число жизненного пути: {lp_num} ({lp_data['name']} · {lp_data['keyword']})\n"
+            f"- Описание: {lp_data['desc']}\n"
+            f"- Сильные стороны: {lp_data['strong']}\n"
+            f"- Точка роста: {lp_data['grow']}\n"
+        )
+    else:
+        numerology_block = ""
+
     system_prompt = (
-        "Ты — «Мой Астролог», персональный астролог-женщина в Telegram-боте. "
-        "Ты тёплая, заботливая, говоришь на «ты». Твоя аудитория — русскоязычные женщины 28-50 лет.\n\n"
+        "Ты — «Мой Астролог», персональный астролог в Telegram-боте. "
+        "Ты тёплый, заботливый, говоришь на «ты».\n\n"
+        f"Пользователь: {gender_note}. Используй правильные падежи и согласование по полу.\n\n"
         "Правила:\n"
-        "- Отвечай кратко: 2-3 предложения максимум.\n"
-        "- Давай конкретные ответы, связанные с гороскопом и знаком пользователя.\n"
-        "- Если вопрос про конкретный раздел гороскопа — цитируй и объясняй именно его.\n"
-        "- Не выходи за рамки астрологической тематики.\n"
+        "- Отвечай развёрнуто, если пользователь просит подробнее: 4-6 предложений.\n"
+        "- Давай конкретные ответы, связанные с данными пользователя.\n"
+        "- Если вопрос про нумерологию — используй нумерологические данные ниже.\n"
+        "- Если вопрос про гороскоп — используй астрологические данные.\n"
         "- Не используй маркдаун, только текст и эмодзи.\n"
         "- Не начинай ответ с обращения или приветствия.\n\n"
         f"Данные пользователя:\n"
         f"- Знак: {sign_name} {sign['symbol']}\n"
         f"- Асцендент: {ascendant}\n"
         f"- Стихия: {sign['element']}\n"
-        f"- Планета: {sign['planet']}\n\n"
+        f"- Планета: {sign['planet']}\n"
+        f"{numerology_block}\n"
         f"Гороскоп на сегодня:\n"
         f"- Общий: {sign['main']}\n"
         f"- Любовь: {sign['love']}\n"
@@ -358,14 +665,14 @@ def ask_claude(question: str, sign: dict, ascendant: str) -> str:
     try:
         response = claude_client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=300,
+            max_tokens=500,
             system=system_prompt,
             messages=[{"role": "user", "content": question}],
         )
         return response.content[0].text
     except Exception as e:
         logger.error(f"Claude API error: {e}")
-        return "Прислушайся к своей интуиции — она сейчас особенно точна ✨"
+        return None  # None = API недоступен, вызывающий код обработает
 
 
 def ask_claude_compat(
@@ -373,17 +680,20 @@ def ask_claude_compat(
     partner_sign_name: str, partner_sign: dict,
     compat_type: str, partner_name: str,
     user_ascendant: str,
+    user_gender: str = "female",
 ) -> str:
     if not claude_client:
         return _fallback_compat(user_sign_name, partner_sign_name)
+    gender_note = "мужчина" if user_gender == "male" else "женщина"
     type_labels = {
         "romantic": "романтическая (пара, муж/жена, партнёр)",
-        "friendship": "дружеская (подруга, коллега)",
-        "family": "семейная (мама, свекровь, ребёнок)",
+        "friendship": "дружеская (друг/подруга, коллега)",
+        "family": "семейная (родственник)",
     }
     system_prompt = (
-        "Ты — «Мой Астролог», персональный астролог-женщина в Telegram-боте. "
-        "Ты тёплая, заботливая, говоришь на «ты».\n\n"
+        "Ты — «Мой Астролог», персональный астролог в Telegram-боте. "
+        "Ты тёплый, заботливый, говоришь на «ты».\n\n"
+        f"Пользователь: {gender_note}. Используй правильное согласование по полу.\n\n"
         "Задача: составить отчёт совместимости двух знаков зодиака.\n\n"
         "Формат ответа (строго):\n"
         "1. Общая совместимость — 2-3 предложения про стихии и энергии пары\n"
@@ -418,37 +728,134 @@ def ask_claude_compat(
         return _fallback_compat(user_sign_name, partner_sign_name)
 
 # ──────────────────────────────────────────────────
+#  ЕЖЕДНЕВНЫЙ ГОРОСКОП: ГЕНЕРАЦИЯ И КЕШ
+# ──────────────────────────────────────────────────
+_WEEKDAYS_RU = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
+
+
+def _generate_claude_horoscope(sign_name: str, sign: dict) -> Optional[dict]:
+    """Генерирует тексты гороскопа на сегодня через Claude. Возвращает dict или None."""
+    if not claude_client:
+        return None
+    today = date.today()
+    date_str = today.strftime("%-d %B %Y")
+    weekday = _WEEKDAYS_RU[today.weekday()]
+    prompt = (
+        f"Составь ежедневный гороскоп для знака {sign_name} ({sign['symbol']}) "
+        f"на {date_str} ({weekday}).\n"
+        f"Стихия: {sign['element']}, планета: {sign['planet']}.\n\n"
+        "Верни ТОЛЬКО валидный JSON (без пояснений, без markdown) с ключами:\n"
+        '- "main": общий прогноз, 2-3 предложения\n'
+        '- "love": любовь и отношения, 1-2 предложения\n'
+        '- "family": дом и семья, 1-2 предложения\n'
+        '- "health": здоровье, 1 предложение\n'
+        '- "finance": деньги и работа, 1-2 предложения\n\n'
+        "Требования: тёплый тон, обращение на «ты», конкретные советы именно на этот день, "
+        "уникальная энергия — не повторяй вчерашнее."
+    )
+    try:
+        response = claude_client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        # Убираем возможный markdown-блок
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        data = json.loads(raw.strip())
+        # Проверяем что все ключи есть
+        if all(k in data for k in ("main", "love", "family", "health", "finance")):
+            return data
+        return None
+    except Exception as e:
+        logger.error(f"Claude daily horoscope generation error: {e}")
+        return None
+
+
+def get_today_sign_texts(sign_name: str, sign: dict, bot_data: dict) -> dict:
+    """
+    Возвращает тексты гороскопа на сегодня для знака.
+    Берёт из кеша если уже сгенерировано, иначе генерирует через Claude.
+    Фоллбэк — статичные тексты из SIGNS.
+    """
+    today_str = date.today().isoformat()
+    cache_key = f"daily_{sign_name}_{today_str}"
+    cache = bot_data.setdefault("daily_horoscope_cache", {})
+
+    # Чистим кеш прошлых дней
+    for old_key in [k for k in cache if not k.endswith(today_str)]:
+        del cache[old_key]
+
+    if cache_key in cache:
+        return cache[cache_key]
+
+    # Генерируем через Claude
+    generated = _generate_claude_horoscope(sign_name, sign)
+    if generated:
+        cache[cache_key] = generated
+        return generated
+
+    # Статичный фоллбэк
+    return {k: sign[k] for k in ("main", "love", "family", "health", "finance")}
+
+
+# ──────────────────────────────────────────────────
 #  ПОСТРОЕНИЕ ТЕКСТОВ И КЛАВИАТУР
 # ──────────────────────────────────────────────────
-def _build_main_keyboard() -> InlineKeyboardMarkup:
+def _build_main_keyboard(gender: str = "female") -> InlineKeyboardMarkup:
+    fr = "другу" if gender == "male" else "подруге"
+    inv = "друга" if gender == "male" else "подругу"
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💕 Проверить совместимость", callback_data="compat")],
-        [InlineKeyboardButton("🎁 Подарить гороскоп подруге", callback_data="gift")],
+        [InlineKeyboardButton("🌙 Лунный день рождения", callback_data="lunar_birthday"),
+         InlineKeyboardButton("🔢 Число судьбы", callback_data="numerology")],
+        [InlineKeyboardButton(f"🎁 Подарить гороскоп {fr}", callback_data="gift")],
         [InlineKeyboardButton("📲 Поделиться", callback_data="share"),
          InlineKeyboardButton("🔄 Обновить", callback_data="refresh")],
-        [InlineKeyboardButton("👥 Пригласить подругу", callback_data="referral"),
+        [InlineKeyboardButton(f"👥 Пригласить {inv}", callback_data="referral"),
          InlineKeyboardButton("⭐ Мой рейтинг", callback_data="rating")],
     ])
 
-def build_horoscope_text(sign: dict, ascendant: str) -> str:
+def build_horoscope_text(sign: dict, ascendant: str, birth_date=None, name="",
+                         daily_texts: Optional[dict] = None) -> str:
     today = datetime.now().strftime("%-d %B %Y").lower()
     today = today[0].upper() + today[1:]
     sign_name = get_sign_name(sign)
+    if birth_date:
+        lunar = get_lunar_data(birth_date)
+        moon_line = (
+            f"🌙 Луна в {lunar['moon_sign_name']} {lunar['moon_sign']['symbol']}  ·  "
+            f"{lunar['lunar_day']}-й лунный день рождения\n"
+        )
+        lp = calc_life_path(birth_date)
+        lp_data = NUMEROLOGY[lp]
+        lp_line = f"🔢 Число жизненного пути: <b>{lp}</b> — {lp_data['keyword']} {lp_data['emoji']}\n"
+    else:
+        moon_line = ""
+        lp_line = ""
+    # Используем свежие тексты от Claude или статичный фоллбэк
+    t = daily_texts or sign
+    greeting = f"{name}, " if name else ""
     return (
-        f"🌙 <b>МОЙ АСТРОЛОГ</b>  ·  {today}\n\n"
+        f"✨ <b>{greeting}твой гороскоп</b>  ·  {today}\n\n"
         f"{sign['symbol']} <b>{sign_name}</b>  ·  <i>{sign['dates']}</i>\n"
-        f"↑ Асцендент: <b>{ascendant}</b>  ·  {sign['element']}\n\n"
-        f"🎨 Цвет: <b>{sign['color']}</b>  ·  🔢 Число: <b>{sign['number']}</b>  ·  💫 {sign['mood']}\n\n"
+        f"↑ Асцендент: <b>{ascendant}</b>  ·  {sign['element']}\n"
+        f"{moon_line}"
+        f"{lp_line}\n"
+        f"🎨 Цвет дня: <b>{sign['color']}</b>  ·  💫 {sign['mood']}\n\n"
         f"━━━━━━━━━━━━━━━━━━\n\n"
-        f"☀️ <b>СОВЕТ НА СЕГОДНЯ</b>\n\n"
-        f"{sign['main']}\n\n"
+        f"☀️ <b>Что важно сегодня</b>\n\n"
+        f"{t['main']}\n\n"
         f"━━━━━━━━━━━━━━━━━━\n\n"
-        f"💕 <b>Любовь</b>\n{sign['love']}\n\n"
-        f"🏠 <b>Семья</b>\n{sign['family']}\n\n"
-        f"🌿 <b>Здоровье</b>\n{sign['health']}\n\n"
-        f"💰 <b>Финансы</b>\n{sign['finance']}\n\n"
+        f"💕 <b>В любви</b>\n{t['love']}\n\n"
+        f"🏡 <b>Дома и с семьёй</b>\n{t['family']}\n\n"
+        f"🌿 <b>Здоровье</b>\n{t['health']}\n\n"
+        f"💰 <b>Деньги</b>\n{t['finance']}\n\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"🔮 <i>Источники: Павел Глоба · Василиса Володина · Дарья Миронова ✓</i>"
+        f"🔮 <i>Сверено с картами: Глоба · Володина · Миронова ✓</i>"
     )
 
 def build_share_text(sign: dict, ascendant: str) -> str:
@@ -520,6 +927,12 @@ async def _show_incoming_gift(update, _context, pending):
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     args = context.args or []
 
+    # Всегда обновляем имя и гендер из Telegram
+    if update.effective_user and update.effective_user.first_name:
+        _uname = update.effective_user.first_name
+        context.user_data["name"] = _uname
+        context.user_data["gender"] = detect_gender(_uname)
+
     # Обработка deep links
     if args:
         arg = args[0]
@@ -548,24 +961,34 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if context.user_data.get("sign"):
         sign = context.user_data["sign"]
         ascendant = context.user_data.get("ascendant", "Неизвестен")
-        horoscope_text = build_horoscope_text(sign, ascendant)
+        uname = context.user_data.get("name", "")
+        ugender = context.user_data.get("gender", "female")
+        sign_name = get_sign_name(sign)
+        daily = get_today_sign_texts(sign_name, sign, context.bot_data)
+        horoscope_text = build_horoscope_text(sign, ascendant, context.user_data.get("birth_date"), uname, daily)
         await update.message.reply_text(
             horoscope_text, parse_mode=ParseMode.HTML,
-            reply_markup=_build_main_keyboard(),
+            reply_markup=_build_main_keyboard(ugender),
         )
-        await update.message.reply_text(
-            "💬 Задай мне любой вопрос — или нажми одну из кнопок выше ✨",
-        )
+        prompt = f"Спрашивай что угодно, {uname} — я отвечу как личный астролог 🌙" if uname else "Спрашивай что угодно — я отвечу как личный астролог 🌙"
+        await update.message.reply_text(prompt)
         return CHAT
 
     # Новый пользователь
+    name = context.user_data.get("name", "")
+    gender = context.user_data.get("gender", "female")
     context.user_data.clear()
+    if name:
+        context.user_data["name"] = name
+        context.user_data["gender"] = gender
+    born_q = "когда ты родился?" if gender == "male" else "когда ты родилась?"
+    hi = f"Привет, {name}! " if name else "Привет! "
     await update.message.reply_text(
-        "🌙 Привет! Я твой персональный астролог.\n\n"
-        "Каждое утро буду присылать гороскоп, составленный специально для тебя "
-        "на основе нескольких авторитетных источников. А ещё ты сможешь задать "
-        "мне любой вопрос — как настоящему астрологу.\n\n"
-        "Для начала скажи мне: <b>когда ты родилась?</b>\n\n"
+        f"🌙 {hi}Я твой персональный астролог.\n\n"
+        "Каждый день буду составлять гороскоп специально для тебя — "
+        "с учётом твоего знака, асцендента и лунного дня. "
+        "Ну и просто поговорить о жизни тоже можно 🌙\n\n"
+        f"С чего начнём? Скажи мне: <b>{born_q}</b>\n\n"
         "Напиши дату в формате <code>ДД.ММ.ГГГГ</code>\n"
         "Например: <code>15.03.1990</code>",
         parse_mode=ParseMode.HTML,
@@ -585,9 +1008,11 @@ async def handle_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         )
         return BIRTH_DATE
     context.user_data["birth_date"] = birth_date
+    gender = context.user_data.get("gender", "female")
+    await update.message.reply_text(build_numerology_text(birth_date, gender), parse_mode=ParseMode.HTML)
+    born_time_q = "в какое время ты родился?" if gender == "male" else "в какое время ты родилась?"
     await update.message.reply_text(
-        "✨ Записала!\n\n"
-        "Теперь скажи, <b>в какое время ты родилась?</b>\n\n"
+        f"✨ Отлично! Теперь скажи: <b>{born_time_q}</b>\n\n"
         "Напиши время в формате <code>ЧЧ:ММ</code>\n"
         "Например: <code>14:30</code>\n\n"
         "<i>Это нужно для точного расчёта твоего восходящего знака (асцендента)</i>",
@@ -625,37 +1050,58 @@ async def handle_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             bonuses = context.bot_data.setdefault("referral_bonuses", {})
             bonuses[referrer_id] = bonuses.get(referrer_id, 0) + 1
             try:
+                # Гендер нового пользователя (кто пришёл по ссылке)
+                new_user_gender = context.user_data.get("gender", "female")
+                friend_word = "друг" if new_user_gender == "male" else "подруга"
+                joined = "зарегистрировался" if new_user_gender == "male" else "зарегистрировалась"
+                # Гендер реферера (кто пригласил)
+                ref_gender = context.bot_data.get("user_genders", {}).get(referrer_id, "female")
+                got = "получил" if ref_gender == "male" else "получила"
                 await context.bot.send_message(
                     referrer_id,
-                    "🎉 Твоя подруга зарегистрировалась по твоей ссылке!\n"
-                    "Ты получила +1 бесплатную проверку совместимости ✨"
+                    f"🎉 Твой {friend_word} {joined} по твоей ссылке!\n"
+                    f"Ты {got} +1 бесплатную проверку совместимости ✨"
                 )
             except Exception:
                 pass
 
+    uname = update.effective_user.first_name if update.effective_user else ""
+    if uname:
+        context.user_data["name"] = uname
+        context.user_data["gender"] = detect_gender(uname)
+        # Сохраняем гендер глобально для реферальных уведомлений
+        context.bot_data.setdefault("user_genders", {})[update.effective_user.id] = context.user_data["gender"]
+
+    ugender = context.user_data.get("gender", "female")
+
     import asyncio
     loading_msg = await update.message.reply_text(
-        "🔮 Анализирую твой натальный чарт...\n\n"
-        "⏳ Запрашиваю прогноз у Павла Глобы...\n"
+        f"🔮 {'Хорошо, ' + uname + '! Составляю' if uname else 'Составляю'} твой персональный гороскоп...\n\n"
+        "⏳ Сверяю с картами Павла Глобы...\n"
         "⏳ Проверяю у Василисы Володиной...\n"
-        "⏳ Сверяю с картами Дарьи Мироновой..."
+        "⏳ Считаю лунный день рождения..."
     )
     await asyncio.sleep(3)
 
-    horoscope_text = build_horoscope_text(sign, ascendant)
+    daily = get_today_sign_texts(get_sign_name(sign), sign, context.bot_data)
+    horoscope_text = build_horoscope_text(sign, ascendant, birth_date, uname, daily)
     await loading_msg.delete()
     await update.message.reply_text(
         horoscope_text, parse_mode=ParseMode.HTML,
-        reply_markup=_build_main_keyboard(),
+        reply_markup=_build_main_keyboard(ugender),
     )
-    await update.message.reply_text(
-        "💬 Можешь задать мне любой вопрос — я отвечу как личный астролог, "
-        "который знает твою карту.\n\n"
-        "<i>Или нажми одну из кнопок выше — например, проверь совместимость!</i>",
-        parse_mode=ParseMode.HTML,
+    followup = (
+        f"Вот твой гороскоп, {uname} 🌙 Можешь спросить меня что угодно — "
+        "или нажать одну из кнопок выше, например проверить совместимость!"
+        if uname else
+        "Можешь спросить меня что угодно — или нажать одну из кнопок выше 🌙"
     )
+    await update.message.reply_text(followup)
     return CHAT
 
+
+_NUMEROLOGY_KEYWORDS = ("нумерол", "число судьбы", "число жизни", "жизненн", "цифр")
+_LUNAR_KEYWORDS = ("лунн", "луна", "лунный день")
 
 async def handle_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text
@@ -663,9 +1109,39 @@ async def handle_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     if not sign:
         await update.message.reply_text("Напиши /start чтобы начать заново.")
         return BIRTH_DATE
+
     ascendant = context.user_data.get("ascendant", "Неизвестен")
-    response = ask_claude(text, sign, ascendant)
-    await update.message.reply_text(f"🌙 {response}")
+    gender = context.user_data.get("gender", "female")
+    birth_date = context.user_data.get("birth_date")
+    text_lower = text.lower()
+
+    # Умный роутинг по ключевым словам (работает даже без Claude API)
+    if any(kw in text_lower for kw in _NUMEROLOGY_KEYWORDS) and birth_date:
+        await update.message.reply_text(build_numerology_text(birth_date, gender), parse_mode=ParseMode.HTML)
+        if claude_client:
+            # Дополнительный комментарий от Claude
+            response = ask_claude(text, sign, ascendant, gender, birth_date)
+            if response:
+                await update.message.reply_text(f"🔢 {response}")
+        return CHAT
+
+    if any(kw in text_lower for kw in _LUNAR_KEYWORDS) and birth_date:
+        await update.message.reply_text(build_lunar_birthday_text(birth_date, gender), parse_mode=ParseMode.HTML)
+        if claude_client:
+            response = ask_claude(text, sign, ascendant, gender, birth_date)
+            if response:
+                await update.message.reply_text(f"🌙 {response}")
+        return CHAT
+
+    # Обычный чат через Claude
+    response = ask_claude(text, sign, ascendant, gender, birth_date)
+    if response:
+        await update.message.reply_text(f"🌙 {response}")
+    else:
+        # Fallback когда Claude недоступен
+        await update.message.reply_text(
+            "🌙 Звёзды немного заняты — попробуй спросить снова через минуту ✨"
+        )
     return CHAT
 
 # ──────────────────────────────────────────────────
@@ -761,6 +1237,7 @@ async def handle_compat_date(update: Update, context: ContextTypes.DEFAULT_TYPE)
         user_sign_name, user_sign,
         partner_sign_name, partner_sign,
         compat_type, partner_name, user_ascendant,
+        context.user_data.get("gender", "female"),
     )
     pct = _calc_compat_pct(user_sign, partner_sign)
 
@@ -1011,10 +1488,12 @@ async def handle_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not sign:
         await query.message.reply_text("Напиши /start чтобы начать заново.")
         return
-    horoscope_text = build_horoscope_text(sign, ascendant)
+    ugender = context.user_data.get("gender", "female")
+    daily = get_today_sign_texts(get_sign_name(sign), sign, context.bot_data)
+    horoscope_text = build_horoscope_text(sign, ascendant, context.user_data.get("birth_date"), context.user_data.get("name", ""), daily)
     await query.message.reply_text(
         horoscope_text, parse_mode=ParseMode.HTML,
-        reply_markup=_build_main_keyboard(),
+        reply_markup=_build_main_keyboard(ugender),
     )
 
 async def handle_share(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1025,10 +1504,34 @@ async def handle_share(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not sign:
         return
     share_text = build_share_text(sign, ascendant)
+    gender = context.user_data.get("gender", "female")
+    friend = "другу" if gender == "male" else "подруге"
     await query.message.reply_text(
-        f"📲 <b>Скопируй и отправь подруге:</b>\n\n{share_text}",
+        f"📲 <b>Скопируй и отправь {friend}:</b>\n\n{share_text}",
         parse_mode=ParseMode.HTML,
     )
+
+async def handle_lunar_birthday(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    birth_date = context.user_data.get("birth_date")
+    if not birth_date:
+        await query.message.reply_text("Напиши /start — сначала введём дату рождения.")
+        return
+    text = build_lunar_birthday_text(birth_date, context.user_data.get("gender", "female"))
+    await query.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
+async def handle_numerology(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    birth_date = context.user_data.get("birth_date")
+    if not birth_date:
+        await query.message.reply_text("Напиши /start — сначала введём дату рождения.")
+        return
+    text = build_numerology_text(birth_date, context.user_data.get("gender", "female"))
+    await query.message.reply_text(text, parse_mode=ParseMode.HTML)
+
 
 # ──────────────────────────────────────────────────
 #  РОУТЕР КНОПОК И КОМАНДЫ
@@ -1054,6 +1557,10 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await handle_rating(update, context)
     elif data == "share_rating":
         await handle_share_rating(update, context)
+    elif data == "lunar_birthday":
+        await handle_lunar_birthday(update, context)
+    elif data == "numerology":
+        await handle_numerology(update, context)
 
     return CHAT
 
@@ -1064,17 +1571,86 @@ async def cmd_horoscope(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not sign:
         await update.message.reply_text("Напиши /start — введём твои данные и составим гороскоп!")
         return
-    horoscope_text = build_horoscope_text(sign, ascendant)
+    ugender = context.user_data.get("gender", "female")
+    daily = get_today_sign_texts(get_sign_name(sign), sign, context.bot_data)
+    horoscope_text = build_horoscope_text(sign, ascendant, context.user_data.get("birth_date"), context.user_data.get("name", ""), daily)
     await update.message.reply_text(
         horoscope_text, parse_mode=ParseMode.HTML,
-        reply_markup=_build_main_keyboard(),
+        reply_markup=_build_main_keyboard(ugender),
     )
+
+
+async def cmd_lunar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    birth_date = context.user_data.get("birth_date")
+    if not birth_date:
+        await update.message.reply_text(
+            "Сначала зарегистрируйся — напиши /start и введи дату рождения 🌙"
+        )
+        return
+    text = build_lunar_birthday_text(birth_date, context.user_data.get("gender", "female"))
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
+async def cmd_numerology(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    birth_date = context.user_data.get("birth_date")
+    if not birth_date:
+        await update.message.reply_text(
+            "Сначала зарегистрируйся — напиши /start и введи дату рождения 🔢"
+        )
+        return
+    text = build_numerology_text(birth_date, context.user_data.get("gender", "female"))
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
     await update.message.reply_text("Окей, начнём заново когда захочешь. Напиши /start 🌙")
     return ConversationHandler.END
+
+# ──────────────────────────────────────────────────
+#  ЕЖЕДНЕВНАЯ РАССЫЛКА
+# ──────────────────────────────────────────────────
+async def send_daily_horoscopes(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Отправляет ежедневный гороскоп всем зарегистрированным пользователям в 10:00 МСК."""
+    app = context.application
+    registered: set = app.bot_data.get("registered_users", set())
+
+    sent = failed = skipped = 0
+    for user_id in registered:
+        ud = app.user_data.get(user_id, {})
+        sign = ud.get("sign")
+        if not sign:
+            skipped += 1
+            continue
+
+        ascendant  = ud.get("ascendant", "Неизвестен")
+        birth_date = ud.get("birth_date")
+        name       = ud.get("name", "")
+        gender     = ud.get("gender", "female")
+        sign_name  = get_sign_name(sign)
+        daily      = get_today_sign_texts(sign_name, sign, app.bot_data)
+
+        horoscope_text = build_horoscope_text(sign, ascendant, birth_date, name, daily)
+        greeting = f", {name}" if name else ""
+
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=f"🌅 Доброе утро{greeting}! Твой гороскоп на сегодня 🔮",
+            )
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=horoscope_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=_build_main_keyboard(gender),
+            )
+            sent += 1
+        except Exception as e:
+            logger.warning(f"Daily horoscope → user {user_id}: {e}")
+            failed += 1
+
+    logger.info(f"Daily horoscope: sent={sent}, failed={failed}, skipped={skipped}")
+
 
 # ──────────────────────────────────────────────────
 #  ЗАПУСК
@@ -1085,7 +1661,7 @@ def main():
         print("Добавь в файл .env строку: BOT_TOKEN=твой_токен\n")
         return
 
-    persistence = PicklePersistence(filepath="bot_data.pickle")
+    persistence = PicklePersistence(filepath=PICKLE_PATH)
     app = Application.builder().token(BOT_TOKEN).persistence(persistence).build()
 
     conv = ConversationHandler(
@@ -1113,9 +1689,20 @@ def main():
 
     app.add_handler(conv)
     app.add_handler(CommandHandler("horoscope", cmd_horoscope))
+    app.add_handler(CommandHandler("lunar", cmd_lunar))
+    app.add_handler(CommandHandler("numerology", cmd_numerology))
     app.add_handler(CommandHandler("group_compat", cmd_group_compat))
     app.add_handler(CommandHandler("join_group", cmd_join_group))
     app.add_handler(CallbackQueryHandler(callback_router))
+
+    # Ежедневная рассылка гороскопов в 10:00 по Москве
+    moscow = ZoneInfo("Europe/Moscow")
+    app.job_queue.run_daily(
+        send_daily_horoscopes,
+        time=dtime(10, 0, 0, tzinfo=moscow),
+        name="daily_horoscope",
+    )
+    logger.info("Daily horoscope job scheduled at 10:00 Moscow time")
 
     print("✅ Бот v2 запущен. Нажми Ctrl+C для остановки.")
     app.run_polling(drop_pending_updates=True)

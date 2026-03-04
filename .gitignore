@@ -10,3 +10,9 @@ venv/
 
 # OS
 .DS_Store
+
+# Bot data (stored on Railway volume, not in git)
+bot_data.pickle
+
+# Logs
+*.log
