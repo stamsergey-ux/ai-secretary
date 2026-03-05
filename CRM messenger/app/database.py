@@ -71,6 +71,8 @@ class Task(Base):
     status = Column(String(20), default="new")  # new, in_progress, done, overdue
     deadline = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
+    progress_percent = Column(Integer, default=0)  # 0-100
+    goal_id = Column(Integer, ForeignKey("strategic_goals.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     meeting = relationship("Meeting", back_populates="tasks")
@@ -89,6 +91,60 @@ class TaskComment(Base):
 
     task = relationship("Task", back_populates="comments")
     author = relationship("Member", back_populates="comments")
+
+
+class ScheduledMeeting(Base):
+    """Scheduled upcoming meetings for agenda distribution and status collection."""
+    __tablename__ = "scheduled_meetings"
+
+    id = Column(Integer, primary_key=True)
+    scheduled_date = Column(DateTime, nullable=False)
+    title = Column(String(500), nullable=True)
+    agenda_text = Column(Text, nullable=True)  # generated agenda
+    agenda_sent = Column(Boolean, default=False)  # was agenda sent to participants
+    status_collection_sent = Column(Boolean, default=False)  # were status requests sent
+    is_completed = Column(Boolean, default=False)  # meeting took place
+    linked_meeting_id = Column(Integer, ForeignKey("meetings.id"), nullable=True)  # after completion
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AgendaRequest(Base):
+    """Agenda items requested by board members for upcoming meetings."""
+    __tablename__ = "agenda_requests"
+
+    id = Column(Integer, primary_key=True)
+    member_id = Column(Integer, ForeignKey("members.id"), nullable=False)
+    topic = Column(Text, nullable=False)
+    reason = Column(Text, nullable=True)
+    scheduled_meeting_id = Column(Integer, ForeignKey("scheduled_meetings.id"), nullable=True)
+    is_included = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class StatusReport(Base):
+    """Pre-meeting status reports from members about their tasks."""
+    __tablename__ = "status_reports"
+
+    id = Column(Integer, primary_key=True)
+    member_id = Column(Integer, ForeignKey("members.id"), nullable=False)
+    scheduled_meeting_id = Column(Integer, ForeignKey("scheduled_meetings.id"), nullable=True)
+    task_id = Column(Integer, ForeignKey("tasks.id"), nullable=True)
+    status_text = Column(Text, nullable=False)  # free-form status update
+    progress_percent = Column(Integer, nullable=True)  # 0-100
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class StrategicGoal(Base):
+    """High-level strategic goals that tasks can be linked to."""
+    __tablename__ = "strategic_goals"
+
+    id = Column(Integer, primary_key=True)
+    title = Column(String(500), nullable=False)
+    description = Column(Text, nullable=True)
+    owner_id = Column(Integer, ForeignKey("members.id"), nullable=True)
+    status = Column(String(20), default="active")  # active, completed, paused
+    target_date = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class MeetingEmbedding(Base):

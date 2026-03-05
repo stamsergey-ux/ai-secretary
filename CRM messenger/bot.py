@@ -1,17 +1,23 @@
 """AI Secretary for Board of Directors — Telegram Bot."""
 
 import asyncio
+import logging
 import os
 
 from dotenv import load_dotenv
 load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 
 from app.database import init_db
-from app.handlers import onboarding, protocol, tasks, chat
+from app.handlers import onboarding, protocol, tasks, voice, meetings, chat
 from app.scheduler import run_scheduler
 
 
@@ -31,10 +37,17 @@ async def main():
     dp.include_router(onboarding.router)
     dp.include_router(protocol.router)
     dp.include_router(tasks.router)
+    dp.include_router(voice.router)
+    dp.include_router(meetings.router)
     dp.include_router(chat.router)  # Must be last — catches all text messages
 
     # Start scheduler in background
     asyncio.create_task(run_scheduler(bot))
+
+    # Force-claim polling: set dummy webhook to kick Railway, then delete it
+    await bot.set_webhook("https://example.com:443/disabled", drop_pending_updates=True)
+    await asyncio.sleep(3)
+    await bot.delete_webhook(drop_pending_updates=True)
 
     print("Bot started!")
     await dp.start_polling(bot)
