@@ -1,6 +1,7 @@
 """AI chat handler — free-form conversation about meetings and tasks."""
 from __future__ import annotations
 
+import io
 import json
 from datetime import datetime
 
@@ -128,6 +129,66 @@ async def _build_agenda() -> str:
     ) or "None"
 
     return await generate_agenda(meetings_ctx, open_tasks_text, overdue_text, agenda_items or "None")
+
+
+def _generate_agenda_pdf(agenda_text: str) -> io.BytesIO:
+    """Generate a PDF document from agenda text."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.enums import TA_LEFT
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.lib.units import cm
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    import os
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4,
+                            leftMargin=2*cm, rightMargin=2*cm,
+                            topMargin=2*cm, bottomMargin=2*cm)
+
+    # Try to register a font that supports Cyrillic
+    font_name = "Helvetica"
+    for font_path in [
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ]:
+        if os.path.exists(font_path):
+            try:
+                pdfmetrics.registerFont(TTFont("CyrFont", font_path))
+                font_name = "CyrFont"
+                break
+            except Exception:
+                continue
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'AgendaTitle', parent=styles['Title'],
+        fontName=font_name, fontSize=16, spaceAfter=12,
+    )
+    body_style = ParagraphStyle(
+        'AgendaBody', parent=styles['Normal'],
+        fontName=font_name, fontSize=11, leading=16, spaceAfter=6,
+    )
+
+    story = []
+    date_str = datetime.now().strftime("%d.%m.%Y")
+    story.append(Paragraph(f"Повестка совещания — {date_str}", title_style))
+    story.append(Spacer(1, 0.5*cm))
+
+    for line in agenda_text.split("\n"):
+        line = line.strip()
+        if not line:
+            story.append(Spacer(1, 0.3*cm))
+            continue
+        # Escape XML special chars for reportlab
+        safe = line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        story.append(Paragraph(safe, body_style))
+
+    doc.build(story)
+    buf.seek(0)
+    return buf
 
 
 @router.callback_query(F.data.startswith("proto_"))
@@ -303,6 +364,14 @@ async def _send_agenda(message: Message):
     # Wrap in styled format
     text = f"📌 ПОВЕСТКА СЛЕДУЮЩЕГО СОВЕЩАНИЯ\n\n{agenda_text}"
     await message.answer(text)
+
+    # Send PDF version
+    pdf_buf = _generate_agenda_pdf(agenda_text)
+    doc = BufferedInputFile(
+        pdf_buf.read(),
+        filename=f"agenda_{datetime.now().strftime('%Y%m%d')}.pdf",
+    )
+    await message.answer_document(doc, caption="📎 Адженда в PDF — можно переслать по почте или прикрепить к приглашению")
 
 
 async def _send_dashboard(message: Message):
@@ -480,7 +549,7 @@ async def _show_advanced_menu(message: Message):
 
 @router.callback_query(F.data == "adv_agenda")
 async def cb_adv_agenda(callback: CallbackQuery):
-    """Generate and show agenda."""
+    """Generate and show agenda + PDF."""
     if not is_chairman(callback.from_user.username):
         await callback.answer("⛔ Доступно администраторам", show_alert=True)
         return
@@ -491,6 +560,14 @@ async def cb_adv_agenda(callback: CallbackQuery):
     if len(text) > 4000:
         text = text[:4000] + "\n\n... <i>обрезано</i>"
     await callback.message.answer(text, parse_mode="HTML")
+
+    # Send PDF version
+    pdf_buf = _generate_agenda_pdf(agenda_text)
+    doc = BufferedInputFile(
+        pdf_buf.read(),
+        filename=f"agenda_{datetime.now().strftime('%Y%m%d')}.pdf",
+    )
+    await callback.message.answer_document(doc, caption="📎 Адженда в PDF — можно переслать по почте или прикрепить к приглашению")
 
 
 @router.callback_query(F.data == "adv_analytics")

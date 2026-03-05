@@ -116,9 +116,6 @@ def _persistent_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     ]
     if is_admin:
         buttons.append(
-            [KeyboardButton(text="📊 Дашборд"), KeyboardButton(text="👥 Все задачи")]
-        )
-        buttons.append(
             [KeyboardButton(text="⚙️ Расширенные функции")]
         )
     buttons.append(

@@ -44,9 +44,7 @@ async def main():
     # Start scheduler in background
     asyncio.create_task(run_scheduler(bot))
 
-    # Force-claim polling: set dummy webhook to kick Railway, then delete it
-    await bot.set_webhook("https://example.com:443/disabled", drop_pending_updates=True)
-    await asyncio.sleep(3)
+    # Clean up any stale webhook before polling
     await bot.delete_webhook(drop_pending_updates=True)
 
     print("Bot started!")
