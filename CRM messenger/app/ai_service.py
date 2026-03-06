@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 from anthropic import AsyncAnthropic
 
 client = AsyncAnthropic(api_key=os.getenv("CLAUDE_API_KEY"))
@@ -49,6 +50,14 @@ Extract the following in JSON format:
       "estimated_minutes": 15,
       "reason": "why this should be on the agenda"
     }}
+  ],
+  "task_status_updates": [
+    {{
+      "task_title_hint": "title or fragment of the task being reported on (in Russian)",
+      "assignee_name": "name of person who reported the status",
+      "new_status": "done or in_progress",
+      "context_quote": "exact quote from transcript where the status was reported"
+    }}
   ]
 }}
 
@@ -58,6 +67,9 @@ IMPORTANT:
 - Extract deadlines when explicitly or implicitly mentioned
 - Include context quotes so decisions can be traced back
 - For agenda_next, include items where someone promised to report back or present something
+- For task_status_updates: capture any moment when a participant says a task/assignment is done,
+  completed, finished, or still in progress. Examples: "задача выполнена", "мы это сделали",
+  "готово", "ещё не успели", "в процессе". Only include if a specific task is clearly identifiable.
 
 TRANSCRIPT:
 {transcript}"""
@@ -114,6 +126,49 @@ USER QUESTION: {user_message}"""
     )
 
     return response.content[0].text
+
+
+async def parse_stakeholder_task(text: str, members_list: str) -> dict:
+    """Parse a stakeholder's task description into structured fields."""
+    prompt = f"""You are an AI secretary for a Board of Directors.
+A shareholder/stakeholder has described a task they want to assign. Extract the structured fields.
+
+Known board members: {members_list}
+
+Extract and return JSON:
+{{
+  "title": "concise task title in Russian (max 100 chars)",
+  "description": "full task description in Russian",
+  "assignee_name": "name of the responsible person (must closely match one of the known members, or null)",
+  "deadline": "YYYY-MM-DD if a date/timeframe is mentioned, else null",
+  "priority": "high/medium/low — default high for stakeholder tasks"
+}}
+
+Rules:
+- Write title and description in Russian
+- Match assignee to the closest known member name
+- If deadline is relative (e.g. 'до пятницы', 'через неделю'), calculate from today {datetime.now().strftime('%Y-%m-%d')}
+- If unclear, set field to null
+- Priority defaults to high for stakeholder assignments
+
+TASK DESCRIPTION:
+{text}"""
+
+    response = await client.messages.create(
+        model=MODEL,
+        max_tokens=1000,
+        messages=[{"role": "user", "content": prompt}]
+    )
+
+    raw = response.content[0].text
+    try:
+        if "```json" in raw:
+            raw = raw.split("```json")[1].split("```")[0]
+        elif "```" in raw:
+            raw = raw.split("```")[1].split("```")[0]
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {"title": text[:100], "description": text, "assignee_name": None, "deadline": None, "priority": "high"}
 
 
 async def generate_agenda(

@@ -84,8 +84,67 @@ async def _get_all_tasks_for_gantt(assignee_filter: str | None = None) -> list[d
     return tasks
 
 
+async def _build_task_review_block() -> str:
+    """Build the first agenda item: structured task status review grouped by assignee."""
+    async with async_session() as session:
+        result = await session.execute(
+            select(Task, Member)
+            .outerjoin(Member, Task.assignee_id == Member.id)
+            .where(Task.status.in_(["new", "in_progress", "overdue"]))
+            .order_by(Task.deadline.asc())
+        )
+        rows = result.all()
+
+    if not rows:
+        return ""
+
+    # Group by assignee
+    by_assignee: dict[str, list] = {}
+    for task, member in rows:
+        name = (member.display_name or member.first_name or member.username) if member else "Без ответственного"
+        by_assignee.setdefault(name, []).append(task)
+
+    total = len(rows)
+    estimated_min = total * 2  # 2 min per task
+
+    lines = [
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "📋 ПУНКТ 1. ПРОВЕРКА СТАТУСА ЗАДАЧ",
+        f"⏱ Расчётное время: ~{estimated_min} мин. ({total} задач × 2 мин.)",
+        "",
+        "По каждой задаче ответственный докладывает:",
+        "  ✅ Выполнено — задача закрывается",
+        "  🔄 В процессе — новый срок или комментарий",
+        "  ❌ Проблема — обсуждение и решение группой",
+        "",
+    ]
+
+    for name, tasks in sorted(by_assignee.items()):
+        overdue_cnt = sum(1 for t in tasks if t.status == "overdue")
+        badge = f"  🚨 {overdue_cnt} просрочено" if overdue_cnt else ""
+        lines.append(f"👤 {name} ({len(tasks)}){badge}")
+
+        # Sort: overdue first, then by deadline
+        sorted_tasks = sorted(
+            tasks,
+            key=lambda t: (t.status != "overdue", t.deadline or datetime.max)
+        )
+        for t in sorted_tasks:
+            icon = {"overdue": "🔴", "in_progress": "🔵", "new": "⬜"}.get(t.status, "⬜")
+            dl = t.deadline.strftime("%d.%m.%Y") if t.deadline else "без срока"
+            if t.status == "overdue" and t.deadline:
+                days = (datetime.utcnow() - t.deadline).days
+                dl += f" (+{days} дн.)"
+            lines.append(f"  {icon} #{t.id} {t.title}")
+            lines.append(f"       📅 {dl}")
+        lines.append("")
+
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    return "\n".join(lines)
+
+
 async def _build_agenda() -> str:
-    """Build agenda using all available context."""
+    """Build agenda: task review block first, then AI-generated items."""
     async with async_session() as session:
         result = await session.execute(
             select(Meeting).where(Meeting.is_confirmed == True)
@@ -128,7 +187,12 @@ async def _build_agenda() -> str:
         f"#{t.id} {t.title} -> {m.name if m else '?'}, deadline: {t.deadline}" for t, m in overdue_rows
     ) or "None"
 
-    return await generate_agenda(meetings_ctx, open_tasks_text, overdue_text, agenda_items or "None")
+    task_review = await _build_task_review_block()
+    ai_agenda = await generate_agenda(meetings_ctx, open_tasks_text, overdue_text, agenda_items or "None")
+
+    if task_review:
+        return task_review + "\n\n" + ai_agenda
+    return ai_agenda
 
 
 def _generate_agenda_pdf(agenda_text: str) -> io.BytesIO:
@@ -273,6 +337,14 @@ async def handle_text_message(message: Message):
 
     if text in ("аналитика", "analytics", "📈 аналитика"):
         return await _show_analytics(message)
+
+    if text in ("задачи акционера", "💎 задачи акционера"):
+        from app.handlers.stakeholder import _render_stakeholder_tasks
+        return await _render_stakeholder_tasks(message)
+
+    if text in ("💎 мои поручения", "мои поручения"):
+        from app.handlers.stakeholder import _render_my_assignments
+        return await _render_my_assignments(message)
 
     # For everything else — AI chat with RAG
     await _ai_chat(message)
@@ -542,6 +614,9 @@ async def _show_advanced_menu(message: Message):
         [
             InlineKeyboardButton(text="👥 Все задачи", callback_data="all_tasks"),
             InlineKeyboardButton(text="📊 Дашборд", callback_data="dashboard_cb"),
+        ],
+        [
+            InlineKeyboardButton(text="💎 Задачи акционера", callback_data="stk_all_tasks"),
         ],
     ])
     await message.answer(text, parse_mode="HTML", reply_markup=keyboard)

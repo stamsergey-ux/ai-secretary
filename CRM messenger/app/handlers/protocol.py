@@ -284,6 +284,47 @@ async def confirm_protocol(callback: CallbackQuery):
                 session.add(task)
                 tasks_created += 1
 
+            # Apply task status updates from transcript
+            status_updates = analysis.get("task_status_updates", [])
+            tasks_completed = 0
+            tasks_updated = 0
+            if status_updates:
+                open_tasks_result = await session.execute(
+                    select(Task).where(Task.status.in_(["new", "in_progress", "overdue"]))
+                )
+                open_tasks = open_tasks_result.scalars().all()
+
+                for upd in status_updates:
+                    hint = (upd.get("task_title_hint") or "").lower().strip()
+                    new_status = upd.get("new_status")
+                    if not hint or new_status not in ("done", "in_progress"):
+                        continue
+
+                    # Fuzzy-match hint against open task titles
+                    best: Task | None = None
+                    best_score = 0
+                    for t in open_tasks:
+                        title_l = t.title.lower()
+                        # Score: substring match or word overlap
+                        if hint in title_l or title_l in hint:
+                            score = 2
+                        else:
+                            hint_words = set(hint.split())
+                            title_words = set(title_l.split())
+                            score = len(hint_words & title_words)
+                        if score > best_score:
+                            best_score = score
+                            best = t
+
+                    if best and best_score > 0:
+                        best.status = new_status
+                        if new_status == "done":
+                            best.completed_at = datetime.utcnow()
+                            best.progress_percent = 100
+                            tasks_completed += 1
+                        else:
+                            tasks_updated += 1
+
             await session.commit()
 
             # Store chunks for RAG
@@ -295,6 +336,10 @@ async def confirm_protocol(callback: CallbackQuery):
         result_text = f"✅ Протокол сохранён!\n\n"
         result_text += f"📝 {analysis.get('title', '')}\n"
         result_text += f"📋 Задач создано: {tasks_created}\n"
+        if tasks_completed:
+            result_text += f"✅ Задач закрыто по итогам встречи: {tasks_completed}\n"
+        if tasks_updated:
+            result_text += f"🔄 Обновлено статусов: {tasks_updated}\n"
         if tasks_unassigned:
             result_text += f"⚠️ Без ответственного: {tasks_unassigned}\n"
         result_text += f"\n🔔 Уведомления отправлены участникам."

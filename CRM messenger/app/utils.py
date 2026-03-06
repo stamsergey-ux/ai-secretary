@@ -10,9 +10,23 @@ ADMIN_USERNAMES = set(
     if u.strip()
 )
 
+# Special stakeholder/shareholder users who can assign tasks
+STAKEHOLDER_USERNAMES = set(
+    u.strip().lower()
+    for u in os.getenv("STAKEHOLDER_USERNAMES", "").split(",")
+    if u.strip()
+)
+
 
 def is_chairman(username: str | None) -> bool:
     """Check if user has admin-level access (chairman or controller)."""
     if not username:
         return False
     return username.lower() in ADMIN_USERNAMES
+
+
+def is_stakeholder(username: str | None) -> bool:
+    """Check if user is a stakeholder/shareholder who can assign tasks."""
+    if not username:
+        return False
+    return username.lower() in STAKEHOLDER_USERNAMES

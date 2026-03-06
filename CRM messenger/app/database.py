@@ -29,10 +29,11 @@ class Member(Base):
     last_name = Column(String(100), nullable=True)
     display_name = Column(String(200), nullable=True)  # how they appear in transcripts
     is_chairman = Column(Boolean, default=False)
+    is_stakeholder = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    tasks = relationship("Task", back_populates="assignee")
+    tasks = relationship("Task", back_populates="assignee", foreign_keys="[Task.assignee_id]")
     comments = relationship("TaskComment", back_populates="author")
 
     @property
@@ -73,10 +74,13 @@ class Task(Base):
     completed_at = Column(DateTime, nullable=True)
     progress_percent = Column(Integer, default=0)  # 0-100
     goal_id = Column(Integer, ForeignKey("strategic_goals.id"), nullable=True)
+    source = Column(String(20), default="manual")  # manual, meeting, stakeholder
+    created_by_id = Column(Integer, ForeignKey("members.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     meeting = relationship("Meeting", back_populates="tasks")
-    assignee = relationship("Member", back_populates="tasks")
+    assignee = relationship("Member", back_populates="tasks", foreign_keys="Task.assignee_id")
+    creator = relationship("Member", foreign_keys="Task.created_by_id")
     comments = relationship("TaskComment", back_populates="task")
 
 
@@ -163,3 +167,26 @@ class MeetingEmbedding(Base):
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    await _migrate_db()
+
+
+async def _migrate_db():
+    """Add new columns to existing tables (safe, idempotent)."""
+    import aiosqlite
+    db_path = DATABASE_URL.replace("sqlite+aiosqlite:///", "")
+    if not db_path.startswith("/"):
+        db_path = db_path  # relative path
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            for sql in [
+                "ALTER TABLE members ADD COLUMN is_stakeholder BOOLEAN DEFAULT FALSE",
+                "ALTER TABLE tasks ADD COLUMN source VARCHAR(20) DEFAULT 'manual'",
+                "ALTER TABLE tasks ADD COLUMN created_by_id INTEGER REFERENCES members(id)",
+            ]:
+                try:
+                    await db.execute(sql)
+                except Exception:
+                    pass  # column already exists
+            await db.commit()
+    except Exception:
+        pass  # DB might not exist yet (first run)
