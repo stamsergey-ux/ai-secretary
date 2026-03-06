@@ -1,5 +1,6 @@
 [build]
 builder = "nixpacks"
+buildCommand = "pip install -r 'CRM messenger/requirements.txt'"
 
 [deploy]
 startCommand = "cd 'CRM messenger' && python3 bot.py"
